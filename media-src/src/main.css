@@ -141,15 +141,16 @@ body.lineno-on [data-line]::after {
   content: attr(data-line);
   position: absolute;
   left: var(--vmd-gutter-x, -65px);
-  top: var(--vmd-gutter-y, 0);
+  top: 0;
   width: 55px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  font-size: var(--vscode-editor-font-size, 14px);
+  /* font-size/line-height 都跟父元素继承 — 浏览器 line-box 机制自动 baseline 对齐 */
+  font-size: inherit;
+  line-height: inherit;
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
-  line-height: 1;
 }
 
 /* 代码块 + 多行段落 per-line gutter overlay

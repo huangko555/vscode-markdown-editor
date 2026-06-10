@@ -111,40 +111,13 @@ function attachLineNumbers() {
     domIdx++
   }
 
-  // 为所有 [data-line] 元素计算 --vmd-gutter-x(让 ::after 落到同一 X 列)
-  // 和 --vmd-gutter-y(用首字符 baseline 跟数字 baseline 对齐补偿字号差)
+  // 为所有 [data-line] 元素计算 --vmd-gutter-x,::after 都落到同一 X 列
+  // ::after font-size/line-height 继承父元素,baseline 由浏览器原生 line-box 机制保对齐
   const rootRect = root.getBoundingClientRect()
-  const numberFontSize = parseFloat(getComputedStyle(root).getPropertyValue('--vscode-editor-font-size')) || 14
   root.querySelectorAll<HTMLElement>('[data-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
     el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5) + 'px')
-    // baseline 对齐补偿:数字 top = 首字符 top + (父字号 - 数字字号) * 0.8
-    const cs = getComputedStyle(el)
-    const parentFontSize = parseFloat(cs.fontSize) || numberFontSize
-    const charRect = findFirstCharRect(el)
-    if (charRect) {
-      const yOffset = (charRect.top - elRect.top) + (parentFontSize - numberFontSize) * 0.8
-      el.style.setProperty('--vmd-gutter-y', yOffset + 'px')
-    }
   })
-}
-
-function findFirstCharRect(el: HTMLElement): DOMRect | null {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-  let node = walker.nextNode()
-  while (node) {
-    if (node.textContent && node.textContent.trim()) {
-      try {
-        const range = document.createRange()
-        range.setStart(node, 0)
-        range.setEnd(node, Math.min(1, (node.textContent || '').length))
-        const r = range.getBoundingClientRect()
-        if (r.height > 0) return r as DOMRect
-      } catch {}
-    }
-    node = walker.nextNode()
-  }
-  return null
 }
 
 function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLine: number) {
