@@ -2,6 +2,8 @@ import { t } from "./lang"
 import { confirm } from "./utils"
 
 export const toolbar = [
+	'outline',
+	'|',
 	{
 		hotkey: '⌘s',
 		name: 'save',
@@ -52,7 +54,6 @@ export const toolbar = [
 			'both',
 			'code-theme',
 			'content-theme',
-			'outline',
 			'preview',
 			{
 				name: 'copy-markdown',
