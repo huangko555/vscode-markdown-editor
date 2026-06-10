@@ -24,11 +24,21 @@ body[data-use-vscode-theme-color="1"] .vditor {
   background-color: rgba(66,133,244,.1);
 }
 /* fenced code block bg follows current VS Code theme via injected CSS var
-   — overrides whatever bg the loaded hljs theme (monokai) brings */
+   — overrides whatever bg the loaded hljs theme (monokai) brings
+   — bg 放到 wrapper 上,而不是 pre/code 上,这样横向滚动时 bg 固定在视口不跟着滚 */
 .vditor-reset pre code,
 .vditor-reset pre code.hljs,
 .vditor-reset pre.hljs {
   background-color: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)) !important;
+}
+.hkq-code-scroll {
+  background-color: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+}
+.hkq-code-scroll pre,
+.hkq-code-scroll pre.hljs,
+.hkq-code-scroll pre code,
+.hkq-code-scroll pre code.hljs {
+  background-color: transparent !important;
 }
 
 /* IR mode: 光标进代码块时,vditor 默认同时显示"可编辑源 + 渲染预览"两块,造成上下两部分
