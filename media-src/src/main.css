@@ -137,20 +137,19 @@ body.lineno-on .vditor-wysiwyg > .vditor-reset {
 body.lineno-on [data-line] {
   position: relative;
 }
-body.lineno-on [data-line]::before {
+body.lineno-on [data-line]::after {
   content: attr(data-line);
   position: absolute;
   left: var(--vmd-gutter-x, -65px);
-  top: 0;
+  top: var(--vmd-gutter-y, 0);
   width: 55px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  /* font-size 跟父元素同步 — 浏览器 line-box 机制保证 baseline 严格对齐 */
-  font-size: inherit;
+  font-size: var(--vscode-editor-font-size, 14px);
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
-  line-height: inherit;
+  line-height: 1;
 }
 
 /* 代码块 + 多行段落 per-line gutter overlay
