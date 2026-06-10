@@ -74,11 +74,30 @@ function attachLineNumbers() {
     } catch {}
     return el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
   }
-  const place = (n: number, top: number) => {
+  // 把数字的 line-height/font-size 跟目标元素同步,baseline 严格对齐
+  const place = (n: number, top: number, refEl?: HTMLElement) => {
     const d = document.createElement('div')
     d.textContent = String(n)
     d.style.top = top + 'px'
+    if (refEl) {
+      const cs = getComputedStyle(refEl)
+      d.style.lineHeight = cs.lineHeight
+    }
     gutter.appendChild(d)
+  }
+  // 拿元素内每一行可视文字的 line rect(浏览器自己测,逐行精确)
+  const lineRectsOf = (el: HTMLElement): DOMRect[] => {
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const out: DOMRect[] = []
+      const rects = range.getClientRects()
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i]
+        if (r.height > 0 && r.width > 0) out.push(r as DOMRect)
+      }
+      return out
+    } catch { return [] }
   }
 
   const children = Array.from(root.children).filter(c => !c.classList.contains('vmd-line-gutter')) as HTMLElement[]
@@ -95,7 +114,7 @@ function attachLineNumbers() {
     const consumed = blockConsumed(line, lines, sourceIdx)
     const endLine = sourceIdx + consumed
 
-    placeBlockNumbers(child, line, startLine, endLine, lines, sourceIdx, place, topOf)
+    placeBlockNumbers(child, line, startLine, endLine, lines, sourceIdx, place, topOf, lineRectsOf, rootRect, root)
 
     sourceIdx += consumed
     domIdx++
@@ -132,28 +151,32 @@ function placeBlockNumbers(
   endLine: number,
   lines: string[],
   sourceIdx: number,
-  place: (n: number, top: number) => void,
+  place: (n: number, top: number, refEl?: HTMLElement) => void,
   topOf: (el: HTMLElement) => number,
+  lineRectsOf: (el: HTMLElement) => DOMRect[],
+  rootRect: DOMRect,
+  root: HTMLElement,
 ) {
-  // 代码块 — 每行精确
+  const ry = (rect: DOMRect) => rect.top - rootRect.top + root.scrollTop
+
+  // 代码块 — 用 Range.getClientRects() 直接拿 <code> 里每一行的精确矩形
   if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
     const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
     if (preview) {
       const code = preview.querySelector('code') as HTMLElement | null
       if (code) {
-        let codeLines = (code.textContent || '').split('\n')
-        if (codeLines.length > 0 && codeLines[codeLines.length - 1] === '') codeLines.pop()
-        const previewTop = topOf(preview)
-        const lh = parseFloat(getComputedStyle(code).lineHeight) || 20
-        for (let i = 0; i < codeLines.length; i++) place(startLine + 1 + i, previewTop + i * lh)
-        return
+        const rects = lineRectsOf(code)
+        if (rects.length > 0) {
+          for (let i = 0; i < rects.length; i++) place(startLine + 1 + i, ry(rects[i]), code)
+          return
+        }
       }
     }
-    stackBlock(child, startLine, endLine, place, topOf)
+    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
     return
   }
 
-  // 表格 — 每个 tr 精确;分隔行 |---| 在 DOM 里无对应 tr,跳过
+  // 表格 — 每个 tr 用 Range 测它的第一行可视文字 Y
   if (firstLine.startsWith('|')) {
     const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table') as HTMLTableElement | null
     if (table) {
@@ -163,12 +186,14 @@ function placeBlockNumbers(
         const sl = lines[si]
         if (!sl.startsWith('|')) break
         if (/^\|[\s|:\-]+\|?\s*$/.test(sl)) { si++; continue }
-        place(si + 1, topOf(allTrs[ti]))
+        const tr = allTrs[ti]
+        const rects = lineRectsOf(tr)
+        place(si + 1, rects.length > 0 ? ry(rects[0]) : topOf(tr), tr)
         ti++; si++
       }
       return
     }
-    stackBlock(child, startLine, endLine, place, topOf)
+    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
     return
   }
 
@@ -177,42 +202,72 @@ function placeBlockNumbers(
     let listEl: HTMLElement | null = null
     if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
     else listEl = child.querySelector('ul, ol')
-    if (listEl) { walkListItems(listEl, lines, sourceIdx, place, topOf); return }
-    stackBlock(child, startLine, endLine, place, topOf)
+    if (listEl) { walkListItems(listEl, lines, sourceIdx, place, topOf, lineRectsOf, ry); return }
+    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
     return
   }
 
-  // 标题、HR — 单行
+  // 标题、HR — 单行,用 Range 拿第一行矩形 top
   if (firstLine.startsWith('#') || /^---+$/.test(firstLine) || /^___+$/.test(firstLine) || /^\*\*\*+$/.test(firstLine)) {
-    place(startLine, topOf(child))
+    const rects = lineRectsOf(child)
+    place(startLine, rects.length > 0 ? ry(rects[0]) : topOf(child), child)
     return
   }
 
-  // 段落、blockquote、其他 — 在块内均匀分布
-  stackBlock(child, startLine, endLine, place, topOf)
+  // 段落、blockquote 等多行块 — 用 Range 拿每行矩形,按源行数匀分到这些矩形
+  stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
 }
 
 function stackBlock(
   child: HTMLElement,
   startLine: number,
   endLine: number,
-  place: (n: number, top: number) => void,
+  place: (n: number, top: number, refEl?: HTMLElement) => void,
   topOf: (el: HTMLElement) => number,
+  lineRectsOf: (el: HTMLElement) => DOMRect[],
+  ry: (r: DOMRect) => number,
 ) {
+  const numLines = endLine - startLine + 1
+  const rects = lineRectsOf(child)
+
+  // 单行块直接对齐第一行可视矩形
+  if (numLines === 1) {
+    place(startLine, rects.length > 0 ? ry(rects[0]) : topOf(child), child)
+    return
+  }
+
+  // 源行数 == 可视行数 → 1:1 对齐 (常见:hard-wrap 段落)
+  if (rects.length === numLines) {
+    for (let i = 0; i < numLines; i++) place(startLine + i, ry(rects[i]), child)
+    return
+  }
+
+  // 源行数 != 可视行数 → 均匀分布在可视行的 Y 范围内 (常见:reflow 段落)
+  if (rects.length > 0) {
+    const topY = ry(rects[0])
+    const bottomY = ry(rects[rects.length - 1])
+    const span = bottomY - topY
+    if (numLines === 1) { place(startLine, topY, child); return }
+    const step = span / (numLines - 1)
+    for (let i = 0; i < numLines; i++) place(startLine + i, topY + i * step, child)
+    return
+  }
+
+  // 兜底:用块的 offsetHeight 平均分
   const blockTop = topOf(child)
   const blockHeight = child.offsetHeight
-  const numLines = endLine - startLine + 1
-  if (numLines === 1) { place(startLine, blockTop); return }
-  const lh = blockHeight / numLines
-  for (let n = startLine; n <= endLine; n++) place(n, blockTop + (n - startLine) * lh)
+  const step = blockHeight / numLines
+  for (let n = startLine; n <= endLine; n++) place(n, blockTop + (n - startLine) * step, child)
 }
 
 function walkListItems(
   listEl: HTMLElement,
   lines: string[],
   startIdx: number,
-  place: (n: number, top: number) => void,
+  place: (n: number, top: number, refEl?: HTMLElement) => void,
   topOf: (el: HTMLElement) => number,
+  lineRectsOf: (el: HTMLElement) => DOMRect[],
+  ry: (r: DOMRect) => number,
 ): number {
   let si = startIdx
   const items = Array.from(listEl.children).filter(c => c.tagName === 'LI') as HTMLElement[]
@@ -223,10 +278,11 @@ function walkListItems(
       si++
     }
     if (si >= lines.length) break
-    place(si + 1, topOf(li))
+    const rects = lineRectsOf(li)
+    place(si + 1, rects.length > 0 ? ry(rects[0]) : topOf(li), li)
     si++
     const nested = Array.from(li.children).find(c => c.tagName === 'UL' || c.tagName === 'OL') as HTMLElement | undefined
-    if (nested) si = walkListItems(nested, lines, si, place, topOf)
+    if (nested) si = walkListItems(nested, lines, si, place, topOf, lineRectsOf, ry)
   }
   return si
 }
