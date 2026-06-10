@@ -215,47 +215,61 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number, a
   el.appendChild(gutter)
 }
 
-// 用源行文字签名在元素文本里搜索每行的 Y
+// 用源行文字签名在元素 textContent 里搜索每行的 Y
+// vditor IR 模式 textContent 保留 markdown 标记(只是 CSS 隐藏),所以用字面值优先
 function findSourceLineYsByText(el: HTMLElement, sourceLines: string[]): number[] {
   const ys: number[] = []
-
-  // 提取每源行的"签名" — 去掉前导 markdown 标记符,取前 15 个字符
-  const sigs = sourceLines.map(line => {
-    let s = line.trim()
-    s = s.replace(/^[>#\-*+]+\s*/, '')      // 前导 > # - * +
-    s = s.replace(/^\d+\.\s+/, '')          // 前导 1. 2.
-    s = s.replace(/\*\*|\*|__|_|`|~/g, '')  // 内联 markdown 标记
-    return s.trim().substring(0, 15)
-  })
-
   const fullText = el.textContent || ''
   let lastPos = 0
-  for (let i = 0; i < sigs.length; i++) {
-    const sig = sigs[i]
-    if (sig.length === 0) {
-      ys.push(ys[i - 1] || 0)
-      continue
-    }
-    const pos = fullText.indexOf(sig, lastPos)
-    if (pos < 0) {
-      ys.push(ys[i - 1] || 0)
-      continue
-    }
+
+  const tryFind = (variant: string, from: number): number => {
+    const sig = variant.substring(0, 25)
+    if (sig.length < 2) return -1
+    return fullText.indexOf(sig, from)
+  }
+
+  const getYAt = (pos: number, sigLen: number): { y: number; endPos: number } | null => {
     const node = findNodeAtTextPos(el, pos)
-    if (node) {
-      try {
-        const range = document.createRange()
-        range.setStart(node.node, node.offset)
-        range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
-        const rect = range.getBoundingClientRect()
-        ys.push(rect.height > 0 ? rect.top : (ys[i - 1] || 0))
-      } catch {
-        ys.push(ys[i - 1] || 0)
+    if (!node) return null
+    try {
+      const range = document.createRange()
+      range.setStart(node.node, node.offset)
+      range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
+      const rect = range.getBoundingClientRect()
+      if (rect.height > 0) return { y: rect.top, endPos: pos + sigLen }
+    } catch {}
+    return null
+  }
+
+  for (let i = 0; i < sourceLines.length; i++) {
+    const raw = sourceLines[i].trim()
+    // 多种签名变体逐个尝试
+    const variants: string[] = [
+      raw,                                                                          // 字面值(IR 模式 textContent 保留 markdown 标记)
+      raw.replace(/^[>#\-*+]+\s*/, '').replace(/^\d+\.\s+/, ''),                    // 去前导标记
+      raw.replace(/\*\*|\*|__|_|`|~/g, ''),                                         // 去内联标记
+      raw.replace(/^[>#\-*+]+\s*/, '').replace(/^\d+\.\s+/, '').replace(/\*\*|\*|__|_|`|~/g, ''), // 全去
+    ]
+
+    let placed = false
+    for (const v of variants) {
+      const sig = v.substring(0, 25)
+      if (sig.length < 2) continue
+      const pos = fullText.indexOf(sig, lastPos)
+      if (pos < 0) continue
+      const res = getYAt(pos, sig.length)
+      if (res) {
+        ys.push(res.y)
+        lastPos = res.endPos
+        placed = true
+        break
       }
-    } else {
-      ys.push(ys[i - 1] || 0)
     }
-    lastPos = pos + sig.length
+
+    if (!placed) {
+      // 全部 fallback 失败 — 用上一行 Y
+      ys.push(ys[i - 1] !== undefined ? ys[i - 1] : 0)
+    }
   }
   return ys
 }
