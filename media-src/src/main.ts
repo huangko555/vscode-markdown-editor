@@ -43,7 +43,10 @@ function initVditor(msg) {
     defaultOptions.preview = defaultOptions.preview || {}
     defaultOptions.preview.theme = { current: 'dark' }
     // dark hljs theme so fenced code blocks don't render with glaring white bg
-    defaultOptions.preview.hljs = { style: 'github-dark' }
+    // valid dark themes in vditor 3.8.4 CODE_THEME list:
+    //   dracula / monokai / native / paraiso-dark / solarized-dark / solarized-dark256 / vim
+    // !! 'github-dark' is NOT in the list and would silently fall back to 'github' (light)
+    defaultOptions.preview.hljs = { style: 'dracula' }
   } else if (msg.theme === 'light') {
     defaultOptions.theme = 'classic'
     defaultOptions.preview = defaultOptions.preview || {}
