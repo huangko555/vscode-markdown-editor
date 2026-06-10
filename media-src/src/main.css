@@ -74,6 +74,18 @@ body[data-use-vscode-theme-color="1"] .vditor {
   padding-left: 35px !important;
 }
 
+/* flip default table zebra:
+   - vditor 默认:所有行 #fafbfc 浅灰 + 偶数 body 行 #fff
+   - 改成:header + 第一 body 行透明(露编辑器底色),其余行半透明灰
+   - 透明度 0.2 比原版"深"一档,深浅主题都自动适应 */
+.vditor-reset table tr,
+.vditor-reset table tbody tr:nth-child(2n) {
+  background-color: transparent !important;
+}
+.vditor-reset table tbody tr:not(:first-child) {
+  background-color: rgba(128, 128, 128, 0.2) !important;
+}
+
 /* make outline panel resizable horizontally (default width 250px preserved) */
 .vditor-outline {
   resize: horizontal !important;
