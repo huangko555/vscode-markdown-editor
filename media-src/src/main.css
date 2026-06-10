@@ -129,6 +129,29 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset table tr {
   background-color: transparent !important;
 }
+/* source line numbers in left gutter (gated by body.lineno-on toggle, default ON)
+   每个顶层渲染块拿到 data-line=源 md 起始行号(由 JS 算)
+   用 ::after 不冲突,因为代码块 ::before 已用于铺 bg */
+.vditor-ir > .vditor-reset > [data-line],
+.vditor-wysiwyg > .vditor-reset > [data-line] {
+  position: relative;
+}
+body.lineno-on .vditor-ir > .vditor-reset > [data-line]::after,
+body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
+  content: attr(data-line);
+  position: absolute;
+  left: -35px;
+  top: 0;
+  width: 28px;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, #6e7681);
+  font-size: 0.85em;
+  user-select: none;
+  pointer-events: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+  opacity: 0.75;
+}
+
 /* zebra default OFF (alpha 0). body.zebra-on triggers visible stripes (alpha 0.1) */
 .vditor-reset table thead tr,
 .vditor-reset table tbody tr:nth-child(2n) {

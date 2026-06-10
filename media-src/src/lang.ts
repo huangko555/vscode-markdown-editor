@@ -5,6 +5,7 @@ const Langs = {
     copyHtml: 'Copy HTML',
     resetConfig: 'Reset config',
     toggleZebra: 'Toggle Table Zebra',
+    toggleLineNumbers: 'Toggle Line Numbers',
     resetConfirm: "Are you sure to reset the Vditor MD Editor's config?",
   },
   ja_JP: {
@@ -19,6 +20,7 @@ const Langs = {
     copyHtml: '复制 HTML',
     resetConfig: '重置配置',
     toggleZebra: '表格条纹',
+    toggleLineNumbers: '行号',
     resetConfirm: '确定要重置 Vditor MD Editor 的配置么?',
   },
 }

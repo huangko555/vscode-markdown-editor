@@ -26,6 +26,69 @@ try {
   }
 } catch {}
 
+// restore lineno toggle state (default ON)
+try {
+  if (localStorage.getItem('vditor-md.lineno') !== '0') {
+    document.body.classList.add('lineno-on')
+  }
+} catch {
+  document.body.classList.add('lineno-on')
+}
+
+// 给每个顶层渲染块标 data-line=源 md 起始行号(行号显示靠 CSS ::after)
+// 算法:把源 md 一行一行扫,识别 block 类型,顺着 DOM 顶层子节点对齐
+function attachLineNumbers() {
+  if (!(window as any).vditor) return
+  const roots = document.querySelectorAll<HTMLElement>('.vditor-reset[contenteditable="true"]')
+  let root: HTMLElement | null = null
+  roots.forEach((r) => { if (r.offsetParent !== null) root = r })  // 选当前可见模式的 root
+  if (!root) return
+
+  const md: string = (window as any).vditor.getValue()
+  const lines = md.split('\n')
+  const children = Array.from(root.children) as HTMLElement[]
+
+  let sourceIdx = 0
+  let domIdx = 0
+
+  while (sourceIdx < lines.length && domIdx < children.length) {
+    while (sourceIdx < lines.length && lines[sourceIdx].trim() === '') sourceIdx++
+    if (sourceIdx >= lines.length) break
+
+    const child = children[domIdx]
+    child.setAttribute('data-line', String(sourceIdx + 1))
+
+    const line = lines[sourceIdx]
+    let consumed = 1
+
+    if (line.startsWith('```') || line.startsWith('~~~')) {
+      const fence = line.substring(0, 3)
+      while (sourceIdx + consumed < lines.length && !lines[sourceIdx + consumed].startsWith(fence)) consumed++
+      consumed++
+    } else if (line.startsWith('|')) {
+      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].startsWith('|')) consumed++
+    } else if (line.startsWith('>')) {
+      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].startsWith('>')) consumed++
+    } else if (/^[*\-+] /.test(line) || /^\d+\. /.test(line)) {
+      while (sourceIdx + consumed < lines.length) {
+        const next = lines[sourceIdx + consumed]
+        if (next.trim() === '') break
+        if (/^[*\-+] /.test(next) || /^\d+\. /.test(next) || next.startsWith('  ') || next.startsWith('\t')) consumed++
+        else break
+      }
+    } else if (!line.startsWith('#') && !/^---+$/.test(line) && !/^___+$/.test(line) && !/^\*\*\*+$/.test(line)) {
+      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].trim() !== '') consumed++
+    }
+
+    sourceIdx += consumed
+    domIdx++
+  }
+
+  for (let i = domIdx; i < children.length; i++) children[i].removeAttribute('data-line')
+}
+
+;(window as any).__attachLineNumbers = attachLineNumbers
+
 
 function initVditor(msg) {
   console.log('msg', msg)
@@ -72,11 +135,13 @@ function initVditor(msg) {
       handleToolbarClick()
       fixTableIr()
       fixPanelHover()
+      attachLineNumbers()
     },
     input() {
       inputTimer && clearTimeout(inputTimer)
       inputTimer = setTimeout(() => {
         vscode.postMessage({ command: 'edit', content: vditor.getValue() })
+        attachLineNumbers()
       }, 100)
     },
     upload: {

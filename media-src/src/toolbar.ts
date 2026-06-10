@@ -58,6 +58,15 @@ export const toolbar = [
 					try { localStorage.setItem('vditor-md.zebra', on ? '1' : '0') } catch {}
 				},
 			},
+			{
+				name: 'toggle-lineno',
+				icon: t('toggleLineNumbers'),
+				click() {
+					const on = document.body.classList.toggle('lineno-on')
+					try { localStorage.setItem('vditor-md.lineno', on ? '1' : '0') } catch {}
+					if (on && (window as any).__attachLineNumbers) (window as any).__attachLineNumbers()
+				},
+			},
 			'both',
 			'code-theme',
 			'content-theme',
