@@ -141,13 +141,13 @@ body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
   content: attr(data-line);
   position: absolute;
   left: -35px;
-  top: 0;
+  bottom: 0;             /* 底对齐 */
   width: 28px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   user-select: none;
   pointer-events: none;
-  opacity: 0.55;
+  opacity: 0.9;
   /* 锁定为编辑器基本字号,不被标题继承放大 */
   font-size: var(--vscode-editor-font-size, 14px);
   line-height: 1;
