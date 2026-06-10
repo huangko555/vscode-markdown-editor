@@ -60,7 +60,23 @@ function attachLineNumbers() {
   root.appendChild(gutter)
 
   const rootRect = root.getBoundingClientRect()
-  const topOf = (el: HTMLElement) => el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
+  // 用 Range 拿元素第一个非空文字节点的首字符 Y,对齐"实际可见文字"的位置
+  // 比直接用 element border-top 准确(后者算的是 box 上沿,会偏到 margin/padding 之上的空白里)
+  const topOf = (el: HTMLElement) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    let node = walker.nextNode()
+    while (node && !(node.textContent && node.textContent.trim())) node = walker.nextNode()
+    if (node && node.textContent) {
+      try {
+        const range = document.createRange()
+        range.setStart(node, 0)
+        range.setEnd(node, 1)
+        const r = range.getBoundingClientRect()
+        if (r.height > 0) return r.top - rootRect.top + root!.scrollTop
+      } catch {}
+    }
+    return el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
+  }
   const place = (n: number, top: number) => {
     const d = document.createElement('div')
     d.textContent = String(n)
