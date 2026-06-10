@@ -30,6 +30,12 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset pre.hljs {
   background-color: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)) !important;
 }
+
+/* IR mode: 光标进代码块时,vditor 默认同时显示"可编辑源 + 渲染预览"两块,造成上下两部分
+   把预览那块藏掉,只剩可编辑源 (plain text,没 hljs token 色 — 这是 vditor 架构限制) */
+.vditor-ir__node--expand[data-type=code-block] .vditor-ir__preview {
+  display: none !important;
+}
 /* center toolbar horizontally within window
    vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
 .vditor-toolbar.vditor-toolbar--pin {
