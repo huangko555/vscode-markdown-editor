@@ -26,6 +26,35 @@ try {
   }
 } catch {}
 
+// wrap rendered code-block <pre> with .hkq-code-scroll so it gets its own
+// horizontal scrollbar (vertical extends naturally — no inner vertical scroll)
+// 只包预览的 <pre>,可编辑源 marker--pre 不动免得破坏 contenteditable 输入
+function wrapCodeBlocks() {
+  const candidates = document.querySelectorAll<HTMLElement>('pre.vditor-ir__preview, .vditor-wysiwyg pre.hljs')
+  candidates.forEach((pre) => {
+    if (pre.parentElement && pre.parentElement.classList.contains('hkq-code-scroll')) return
+    const wrapper = document.createElement('div')
+    wrapper.className = 'hkq-code-scroll'
+    pre.parentElement?.insertBefore(wrapper, pre)
+    wrapper.appendChild(pre)
+  })
+}
+
+// 用 MutationObserver 跟进 vditor 每次 re-render(input/mode 切换都会换 DOM)
+let __wrapTimer: any
+const __codeBlockObserver = new MutationObserver(() => {
+  if (__wrapTimer) clearTimeout(__wrapTimer)
+  __wrapTimer = setTimeout(wrapCodeBlocks, 50)
+})
+// body 还没就绪时 observer 还没启动 — 等 DOMContentLoaded 兜底
+if (document.body) {
+  __codeBlockObserver.observe(document.body, { childList: true, subtree: true })
+} else {
+  document.addEventListener('DOMContentLoaded', () => {
+    __codeBlockObserver.observe(document.body, { childList: true, subtree: true })
+  })
+}
+
 function initVditor(msg) {
   console.log('msg', msg)
   let inputTimer

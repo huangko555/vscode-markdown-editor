@@ -37,14 +37,22 @@ body[data-use-vscode-theme-color="1"] .vditor {
   display: none !important;
 }
 
-/* 代码块纵向永远完整展开,不要 max-height 限高 + 内部纵向滚动条
-   横向 long line 由编辑器整体的横向滚动消化 (单元素不能 overflow-x auto + overflow-y visible,会被浏览器强制双 auto) */
+/* 代码块纵向永远完整展开,不要 max-height 限高
+   .hkq-code-scroll wrapper(JS 包的)负责横向滚动,pre 本身 overflow visible 不裁切 */
 .vditor-reset pre.hljs,
 .vditor-reset pre code,
 .vditor-reset pre code.hljs {
   max-height: none !important;
   height: auto !important;
   overflow: visible !important;
+}
+.hkq-code-scroll {
+  overflow-x: auto;       /* 横向有内容超出时显示横向滚动条 */
+  padding-bottom: 2px;    /* 给滚动条腾位置,避免触发额外的纵向滚动 */
+  max-width: 100%;
+}
+.hkq-code-scroll > pre {
+  margin: 0 !important;   /* wrapper 自己带 margin/padding,pre 重置 */
 }
 /* center toolbar horizontally within window
    vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
