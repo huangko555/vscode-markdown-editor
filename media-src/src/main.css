@@ -152,6 +152,17 @@ body.lineno-on [data-line]::after {
   user-select: none;
   pointer-events: none;
 }
+/* 标题数字上浮成 label 样,避免跟标题文字同 baseline 视觉重叠 */
+body.lineno-on h1[data-line]::after,
+body.lineno-on h2[data-line]::after,
+body.lineno-on h3[data-line]::after,
+body.lineno-on h4[data-line]::after,
+body.lineno-on h5[data-line]::after,
+body.lineno-on h6[data-line]::after {
+  top: -0.4em;
+  font-size: var(--vscode-editor-font-size, 14px);
+  line-height: 1;
+}
 
 /* 代码块 + 多行段落 per-line gutter overlay
    数字 div 各自带 style="top: <Y>px" (JS 用 Range 实测每行 Y),严格 1:1 对齐每行 */

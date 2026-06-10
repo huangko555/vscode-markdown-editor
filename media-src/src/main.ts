@@ -149,9 +149,15 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
   const offset = -(previewRect.left - rootRect.left) + 5
   gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
 
+  // baseline 微调:Range.getBoundingClientRect 返回 glyph top,数字 line-height:1 时
+  // 视觉 baseline 比代码 baseline 略高几像素,补一个经验 shift 让数字落下来
+  const codeLh = parseFloat(getComputedStyle(code).lineHeight) || 14
+  const codeFs = parseFloat(getComputedStyle(code).fontSize) || 14
+  const yShift = Math.max(0, (codeLh - codeFs) / 2)
+
   let html = ''
   for (let i = 0; i < lineYs.length; i++) {
-    const relY = lineYs[i] - previewRect.top
+    const relY = lineYs[i] - previewRect.top + yShift
     html += `<div style="top:${relY}px">${contentStartLine + i}</div>`
   }
   gutter.innerHTML = html
@@ -216,31 +222,24 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   gutter.setAttribute('contenteditable', 'false')
   gutter.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5) + 'px')
 
-  // 字号差补偿 baseline
-  const numberFontSize = parseFloat(getComputedStyle(root).getPropertyValue('--vscode-editor-font-size')) || 14
-  const parentFontSize = parseFloat(getComputedStyle(el).fontSize) || numberFontSize
-  const baselineFix = (parentFontSize - numberFontSize) * 0.8
+  // baseline 微调:数字 line-height:1 时上浮几像素,补 yShift 让它对齐父行
+  const elLh = parseFloat(getComputedStyle(el).lineHeight) || 14
+  const elFs = parseFloat(getComputedStyle(el).fontSize) || 14
+  const yShift = Math.max(0, (elLh - elFs) / 2)
 
   let html = ''
   if (lineYs.length === numLines) {
-    // 1:1 精确 (有 <br> 分隔)
     for (let i = 0; i < numLines; i++) {
-      const y = (lineYs[i] - elRect.top) + baselineFix
-      html += `<div style="top:${y}px">${startLine + i}</div>`
+      html += `<div style="top:${(lineYs[i] - elRect.top) + yShift}px">${startLine + i}</div>`
     }
   } else if (lineYs.length === 1) {
-    // 只有 1 个 visible 起点 → reflow 段落,堆叠在第一行 Y
     for (let i = 0; i < numLines; i++) {
-      const y = (lineYs[0] - elRect.top) + baselineFix
-      html += `<div style="top:${y}px">${startLine + i}</div>`
+      html += `<div style="top:${(lineYs[0] - elRect.top) + yShift}px">${startLine + i}</div>`
     }
   } else {
-    // 数量不匹配 → 已知的 lineYs + 多余的源行(均匀填补到剩余的可视 Y 之间)
     for (let i = 0; i < numLines; i++) {
-      let y: number
-      if (i < lineYs.length) y = lineYs[i] - elRect.top
-      else y = (lineYs[lineYs.length - 1] - elRect.top)
-      html += `<div style="top:${y + baselineFix}px">${startLine + i}</div>`
+      const y = i < lineYs.length ? (lineYs[i] - elRect.top) : (lineYs[lineYs.length - 1] - elRect.top)
+      html += `<div style="top:${y + yShift}px">${startLine + i}</div>`
     }
   }
   gutter.innerHTML = html
