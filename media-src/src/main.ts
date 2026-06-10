@@ -42,10 +42,13 @@ function initVditor(msg) {
     defaultOptions.theme = 'dark'
     defaultOptions.preview = defaultOptions.preview || {}
     defaultOptions.preview.theme = { current: 'dark' }
+    // dark hljs theme so fenced code blocks don't render with glaring white bg
+    defaultOptions.preview.hljs = { style: 'github-dark' }
   } else if (msg.theme === 'light') {
     defaultOptions.theme = 'classic'
     defaultOptions.preview = defaultOptions.preview || {}
     defaultOptions.preview.theme = { current: 'light' }
+    defaultOptions.preview.hljs = { style: 'github' }
   }
   if (window.vditor) {
     vditor.destroy()
