@@ -141,6 +141,34 @@ body.lineno-on .vditor-ir > .vditor-reset,
 body.lineno-on .vditor-wysiwyg > .vditor-reset {
   padding-left: 65px !important;
 }
+/* code block per-line gutter overlay */
+.vditor-ir__node[data-type=code-block] pre.vditor-ir__preview {
+  position: relative;
+}
+body.lineno-on .hkq-code-gutter {
+  position: absolute;
+  left: -60px;
+  top: 0;
+  width: 50px;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, #6e7681);
+  opacity: 0.9;
+  user-select: none;
+  pointer-events: none;
+  font-size: var(--vscode-editor-font-size, 14px);
+  white-space: normal;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  line-height: inherit;
+}
+body.lineno-on .hkq-code-gutter > div {
+  line-height: inherit;
+}
+/* 代码块用了 per-line gutter,块级 ::after 区间号就藏掉避免重复 */
+body.lineno-on .vditor-ir__node[data-type=code-block][data-line]::after {
+  display: none;
+}
 body.lineno-on .vditor-ir > .vditor-reset > [data-line]::after,
 body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
   content: attr(data-line);

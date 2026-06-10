@@ -88,6 +88,45 @@ function attachLineNumbers() {
   }
 
   for (let i = domIdx; i < children.length; i++) children[i].removeAttribute('data-line')
+
+  // 代码块单独走 per-line gutter (块级区间号在 CSS 里隐藏)
+  attachCodeBlockGutters()
+}
+
+// 为每个 IR 渲染代码块,在它的 preview pre 里塞一个左侧 .hkq-code-gutter overlay,
+// 内含每一可视行对应的源 md 行号
+function attachCodeBlockGutters() {
+  const nodes = document.querySelectorAll<HTMLElement>('.vditor-ir__node[data-type=code-block][data-line]')
+  nodes.forEach((node) => {
+    const range = node.getAttribute('data-line') || ''
+    const startLine = parseInt(range.split('-')[0])
+    if (isNaN(startLine)) return
+
+    const preview = node.querySelector('pre.vditor-ir__preview') as HTMLElement | null
+    if (!preview) return
+    const code = preview.querySelector('code')
+    if (!code) return
+
+    let lines = (code.textContent || '').split('\n')
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    if (lines.length === 0) return
+
+    // 先清掉旧 gutter
+    const old = preview.querySelector(':scope > .hkq-code-gutter')
+    if (old) old.remove()
+
+    const gutter = document.createElement('div')
+    gutter.className = 'hkq-code-gutter'
+    gutter.setAttribute('contenteditable', 'false')
+    let html = ''
+    // startLine 是 ``` 开头那行,内容第一行 = startLine + 1
+    for (let i = 0; i < lines.length; i++) {
+      html += `<div>${startLine + 1 + i}</div>`
+    }
+    gutter.innerHTML = html
+
+    preview.appendChild(gutter)
+  })
 }
 
 ;(window as any).__attachLineNumbers = attachLineNumbers
