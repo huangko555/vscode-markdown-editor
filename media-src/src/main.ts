@@ -162,29 +162,30 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
 }
 
 // 多源行块:per-line gutter
-// 用每个源行的文本签名在元素 textContent 里搜索它的位置,再映射回 DOM 找 Y
-// — 不依赖 DOM 结构(<br>/嵌套 block),只要文字在就找得到
-function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number, allLines: string[]) {
+// 简单可靠的方案 — 取所有可视行矩形,源行 i 对应 rects[i].top
+// 长源行 wrap 时下一源行号会落到上一源行的 wrap 上,但至少不会重叠
+function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number, _allLines: string[]) {
   const numLines = endLine - startLine + 1
-  const sourceLines = allLines.slice(startLine - 1, endLine)
 
-  let lineYs = findSourceLineYsByText(el, sourceLines)
-
-  // 如果文本搜索失败,fallback 用结构(<br> / 嵌套 block)
-  if (lineYs.length < numLines) {
-    const structureYs = findSourceLineYsByStructure(el)
-    const merged = [...lineYs, ...structureYs]
-    merged.sort((a, b) => a - b)
-    const dedup: number[] = []
-    for (const y of merged) {
-      if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
-    }
-    if (dedup.length > lineYs.length) lineYs = dedup
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const rectsArr: DOMRect[] = []
+  const allRects = range.getClientRects()
+  for (let i = 0; i < allRects.length; i++) {
+    const r = allRects[i]
+    if (r.height > 0 && r.width > 0) rectsArr.push(r as DOMRect)
   }
 
-  if (lineYs.length === 0) {
+  if (rectsArr.length === 0) {
     el.setAttribute('data-line', `${startLine}-${endLine}`)
     return
+  }
+
+  // 每个源行 i 取 rects[i].top;超出 rects 长度时落到最后一行
+  const lineYs: number[] = []
+  for (let i = 0; i < numLines; i++) {
+    const idx = Math.min(i, rectsArr.length - 1)
+    lineYs.push(rectsArr[idx].top)
   }
 
   const root = el.closest('.vditor-reset') as HTMLElement | null
