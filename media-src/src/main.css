@@ -66,13 +66,13 @@ body[data-use-vscode-theme-color="1"] .vditor {
   padding-left: 10px !important;
 }
 
-/* heading colors — GitHub Dark blue gradient */
-.vditor-reset h1, .vditor-ir h1, .vditor-wysiwyg h1 { color: #58a6ff; }
-.vditor-reset h2, .vditor-ir h2, .vditor-wysiwyg h2 { color: #79c0ff; }
-.vditor-reset h3, .vditor-ir h3, .vditor-wysiwyg h3 { color: #a5d6ff; }
-.vditor-reset h4, .vditor-ir h4, .vditor-wysiwyg h4 { color: #cae8ff; }
-.vditor-reset h5, .vditor-ir h5, .vditor-wysiwyg h5 { color: #d8e9f7; }
-.vditor-reset h6, .vditor-ir h6, .vditor-wysiwyg h6 { color: #e6edf3; }
+/* heading colors — uniform blue across all levels */
+.vditor-reset h1, .vditor-reset h2, .vditor-reset h3,
+.vditor-reset h4, .vditor-reset h5, .vditor-reset h6,
+.vditor-ir h1, .vditor-ir h2, .vditor-ir h3,
+.vditor-ir h4, .vditor-ir h5, .vditor-ir h6,
+.vditor-wysiwyg h1, .vditor-wysiwyg h2, .vditor-wysiwyg h3,
+.vditor-wysiwyg h4, .vditor-wysiwyg h5, .vditor-wysiwyg h6 { color: #58a6ff; }
 .jconfirm {
   color: black;
 }
