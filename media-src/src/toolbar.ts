@@ -45,12 +45,11 @@ export const toolbar = [
 	'|',
 	'undo',
 	'redo',
-	'|',
-	{ name: 'edit-mode', tipPosition: 'e', },
 	{
 		name: 'more',
 		tipPosition: 'e',
 		toolbar: [
+			'edit-mode',
 			'both',
 			'code-theme',
 			'content-theme',
