@@ -7,14 +7,14 @@ function debug(...args: any[]) {
 }
 
 function showError(msg: string) {
-  vscode.window.showErrorMessage(`[markdown-editor] ${msg}`)
+  vscode.window.showErrorMessage(`[vditor-md] ${msg}`)
 }
 
 export function activate(context: vscode.ExtensionContext) {
   // Register original command (used by context menu/shortcuts)
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      'markdown-editor.openEditor',
+      'vditor-md.openEditor',
       (uri?: vscode.Uri, ...args) => {
         debug('command', uri, args)
         EditorPanel.createOrShow(context, uri)
@@ -48,7 +48,7 @@ class EditorPanel {
    */
   public static currentPanel: EditorPanel | undefined
 
-  public static readonly viewType = 'markdown-editor'
+  public static readonly viewType = 'vditor-md'
 
   private _disposables: vscode.Disposable[] = []
 
@@ -96,7 +96,7 @@ class EditorPanel {
     // Otherwise, create a new panel.
     const panel = vscode.window.createWebviewPanel(
       EditorPanel.viewType,
-      'markdown-editor',
+      'vditor-md',
       column || vscode.ViewColumn.One,
       EditorPanel.getWebviewOptions(uri)
     )
@@ -135,7 +135,7 @@ class EditorPanel {
   }
 
   static get config() {
-    return vscode.workspace.getConfiguration('markdown-editor')
+    return vscode.workspace.getConfiguration('vditor-md')
   }
 
   private constructor(
@@ -417,7 +417,7 @@ class EditorPanel {
  * Supports opening markdown files via "Open With"
  */
 class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
-  public static readonly viewType = 'markdown-editor.customEditor'
+  public static readonly viewType = 'vditor-md.customEditor'
 
   constructor(private readonly context: vscode.ExtensionContext) { }
 

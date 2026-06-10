@@ -1,10 +1,10 @@
 {
-  "name": "markdown-editor",
-  "displayName": "Markdown Editor",
+  "name": "vditor-md",
+  "displayName": "Vditor MD Editor",
   "icon": "media/logo.png",
-  "description": "A full-featured WYSIWYG editor for markdown.",
+  "description": "Personal fork of zaaack/vscode-markdown-editor with outline button + heading colors + smaller padding.",
   "version": "0.1.14",
-  "publisher": "zaaack",
+  "publisher": "huangko555",
   "private": true,
   "engines": {
     "vscode": "^1.47.0"
@@ -17,49 +17,48 @@
     "markdown",
     "editor",
     "wysiwyg",
-    "typora",
-    "markdown-previewer",
-    "markdown-editor"
+    "vditor",
+    "vditor-md"
   ],
   "activationEvents": [
-    "onCommand:markdown-editor.openEditor",
-    "onWebviewPanel:markdown-editor",
+    "onCommand:vditor-md.openEditor",
+    "onWebviewPanel:vditor-md",
     "onLanguage:markdown",
-    "onCustomEditor:markdown-editor.customEditor"
+    "onCustomEditor:vditor-md.customEditor"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/zaaack/vscode-markdown-editor.git"
+    "url": "https://github.com/huangko555/vscode-markdown-editor.git"
   },
   "main": "out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "markdown-editor.openEditor",
-        "title": "Open with markdown editor",
-        "category": "markdown-editor"
+        "command": "vditor-md.openEditor",
+        "title": "Open with Vditor MD Editor",
+        "category": "vditor-md"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "when": "resourceLangId == markdown",
-          "command": "markdown-editor.openEditor",
+          "command": "vditor-md.openEditor",
           "group": "navigation"
         }
       ],
       "editor/title/context": [
         {
           "when": "resourceLangId == markdown",
-          "command": "markdown-editor.openEditor",
+          "command": "vditor-md.openEditor",
           "group": "1_open"
         }
       ]
     },
     "customEditors": [
       {
-        "viewType": "markdown-editor.customEditor",
-        "displayName": "Markdown Editor (Vditor)",
+        "viewType": "vditor-md.customEditor",
+        "displayName": "Vditor MD Editor",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -72,19 +71,19 @@
       }
     ],
     "configuration": {
-      "title": "markdown-editor",
+      "title": "Vditor MD Editor",
       "properties": {
-        "markdown-editor.imageSaveFolder": {
+        "vditor-md.imageSaveFolder": {
           "type": "string",
           "default": "assets",
           "description": "Save images to which folder when upload in markdown, default relative to the markdown file, you can set to project root via `${projectRoot}/assets`."
         },
-        "markdown-editor.useVscodeThemeColor": {
+        "vditor-md.useVscodeThemeColor": {
           "type": "boolean",
           "default": true,
           "description": "Use vscode theme's background color as the markdown editor's background color."
         },
-        "markdown-editor.customCss": {
+        "vditor-md.customCss": {
           "type": "string",
           "default": ""
         }
@@ -93,7 +92,7 @@
     "keybindings": [
       {
         "key": "ctrl+shift+alt+m",
-        "command": "markdown-editor.openEditor",
+        "command": "vditor-md.openEditor",
         "mac": "cmd+shift+alt+m",
         "when": "editorTextFocus && editorLangId == markdown"
       }
