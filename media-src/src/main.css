@@ -45,28 +45,31 @@ body[data-use-vscode-theme-color="1"] .vditor {
   height: auto !important;
   overflow: visible !important;
 }
-.hkq-code-scroll {
-  overflow-x: auto;
-  padding-bottom: 2px;
-  max-width: 100%;
-  /* 关键:bg 用 实底色 + opaque tint linear-gradient 叠成完全不透明的 distinct 色
-     不依赖 textCodeBlock-background 这种半透明 var,避免下层 editor bg 的 line-highlight / selection 等
-     效果"漏"上来 */
+/* 代码块 bg 用 ::before 伪元素铺在 node 底层,pointer-events:none 让 click 完全透过
+   vditor 的 IR expand 逻辑不受任何 DOM 包装干扰 */
+.vditor-ir__node[data-type=code-block] {
+  position: relative;
+}
+.vditor-ir__node[data-type=code-block]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   background-color: var(--vscode-editor-background);
   background-image: linear-gradient(rgba(120, 160, 220, 0.08), rgba(120, 160, 220, 0.08));
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 3px;
 }
-.hkq-code-scroll pre,
-.hkq-code-scroll pre.hljs,
-.hkq-code-scroll pre code,
-.hkq-code-scroll pre code.hljs {
+
+/* pre 透明,bg 由下面的伪元素提供;overflow visible 让纵向完整撑开
+   横向超长行延伸出代码块边界,被屏幕右边或编辑器边界裁切(用户已经接受这点) */
+.vditor-ir pre.vditor-ir__preview,
+.vditor-wysiwyg pre.hljs {
   background-color: transparent !important;
   background-image: none !important;
-}
-.hkq-code-scroll > pre {
-  margin: 0 !important;
-  min-width: 100%;
-  box-sizing: border-box;
-  display: block;
+  overflow: visible !important;
+  max-height: none !important;
+  height: auto !important;
 }
 /* center toolbar horizontally within window
    vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
