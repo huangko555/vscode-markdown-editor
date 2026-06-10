@@ -59,7 +59,7 @@
     "customEditors": [
       {
         "viewType": "markdown-editor.customEditor",
-        "displayName": "Markdown Editor",
+        "displayName": "Markdown Editor (Vditor)",
         "selector": [
           {
             "filenamePattern": "*.md"
