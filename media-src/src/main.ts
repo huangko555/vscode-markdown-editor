@@ -35,10 +35,8 @@ try {
   document.body.classList.add('lineno-on')
 }
 
-// 全局 gutter:单一容器 .vmd-line-gutter 放所有行号子 div,X 列一致对齐
-// 每个数字的 top = 对应 DOM 元素相对 root 的 Y 偏移
-// — 代码块/表格/列表精确到行
-// — 段落/blockquote 多行块在块内均匀分布(reflow 后逐行没法精确,但数字齐全)
+// 行号 = 元素的 ::before 伪元素(content=attr(data-line)),浏览器原生 inline 机制保证 baseline 严格对齐
+// JS 只算每个元素的 --vmd-gutter-x(水平偏移),让所有 ::before 落到同一 X 列
 function attachLineNumbers() {
   if (!(window as any).vditor) return
   const roots = document.querySelectorAll<HTMLElement>('.vditor-reset[contenteditable="true"]')
@@ -49,58 +47,11 @@ function attachLineNumbers() {
   const md: string = (window as any).vditor.getValue()
   const lines = md.split('\n')
 
-  root.style.position = 'relative'
+  // 清掉旧的 data-line 和 code gutter
+  root.querySelectorAll('[data-line]').forEach(el => el.removeAttribute('data-line'))
+  root.querySelectorAll('.vmd-code-gutter, .vmd-line-gutter').forEach(el => el.remove())
 
-  const old = root.querySelector(':scope > .vmd-line-gutter')
-  if (old) old.remove()
-
-  const gutter = document.createElement('div')
-  gutter.className = 'vmd-line-gutter'
-  gutter.setAttribute('contenteditable', 'false')
-  root.appendChild(gutter)
-
-  const rootRect = root.getBoundingClientRect()
-  // 用 Range.selectNodeContents() + getClientRects() 拿元素的"每一行可视文字"的矩形
-  // 浏览器原生测量,自动处理 marker/隐藏 span/嵌套段落等;返回第一个非空的行矩形 top
-  const topOf = (el: HTMLElement) => {
-    try {
-      const range = document.createRange()
-      range.selectNodeContents(el)
-      const rects = range.getClientRects()
-      for (let i = 0; i < rects.length; i++) {
-        const r = rects[i]
-        if (r.height > 0 && r.width > 0) return r.top - rootRect.top + root!.scrollTop
-      }
-    } catch {}
-    return el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
-  }
-  // 把数字的 line-height/font-size 跟目标元素同步,baseline 严格对齐
-  const place = (n: number, top: number, refEl?: HTMLElement) => {
-    const d = document.createElement('div')
-    d.textContent = String(n)
-    d.style.top = top + 'px'
-    if (refEl) {
-      const cs = getComputedStyle(refEl)
-      d.style.lineHeight = cs.lineHeight
-    }
-    gutter.appendChild(d)
-  }
-  // 拿元素内每一行可视文字的 line rect(浏览器自己测,逐行精确)
-  const lineRectsOf = (el: HTMLElement): DOMRect[] => {
-    try {
-      const range = document.createRange()
-      range.selectNodeContents(el)
-      const out: DOMRect[] = []
-      const rects = range.getClientRects()
-      for (let i = 0; i < rects.length; i++) {
-        const r = rects[i]
-        if (r.height > 0 && r.width > 0) out.push(r as DOMRect)
-      }
-      return out
-    } catch { return [] }
-  }
-
-  const children = Array.from(root.children).filter(c => !c.classList.contains('vmd-line-gutter')) as HTMLElement[]
+  const children = Array.from(root.children) as HTMLElement[]
   let sourceIdx = 0
   let domIdx = 0
 
@@ -110,15 +61,116 @@ function attachLineNumbers() {
 
     const child = children[domIdx]
     const startLine = sourceIdx + 1
-    const line = lines[sourceIdx]
-    const consumed = blockConsumed(line, lines, sourceIdx)
+    const firstLine = lines[sourceIdx]
+    const consumed = blockConsumed(firstLine, lines, sourceIdx)
     const endLine = sourceIdx + consumed
+    const labelText = startLine === endLine ? String(startLine) : `${startLine}-${endLine}`
 
-    placeBlockNumbers(child, line, startLine, endLine, lines, sourceIdx, place, topOf, lineRectsOf, rootRect, root)
+    if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
+      // 代码块:per-line gutter overlay
+      const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
+      if (preview) {
+        const code = preview.querySelector('code') as HTMLElement | null
+        if (code) buildCodeGutter(preview, code, startLine + 1)
+      }
+      // 不在 child 上加 data-line(避免 ::before 重叠 gutter)
+    } else if (firstLine.startsWith('|')) {
+      // 表格:per-tr data-line 放在第一个 td/th
+      const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table')
+      if (table) {
+        markTableRows(table, lines, sourceIdx)
+      } else {
+        child.setAttribute('data-line', labelText)
+      }
+    } else if (/^[*\-+] /.test(firstLine) || /^\d+\. /.test(firstLine)) {
+      // 列表:per-li 递归
+      let listEl: HTMLElement | null = null
+      if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
+      else listEl = child.querySelector('ul, ol')
+      if (listEl) markListItems(listEl, lines, sourceIdx)
+      else child.setAttribute('data-line', labelText)
+    } else {
+      // 标题、段落、HR、blockquote 等:单一 data-line(多行段落用 range)
+      child.setAttribute('data-line', labelText)
+    }
 
     sourceIdx += consumed
     domIdx++
   }
+
+  // 为所有 [data-line] 元素计算 --vmd-gutter-x,让 ::before 落到同一 X 列
+  const rootRect = root.getBoundingClientRect()
+  root.querySelectorAll<HTMLElement>('[data-line]').forEach(el => {
+    const elLeft = el.getBoundingClientRect().left
+    const offset = -(elLeft - rootRect.left) + 5
+    el.style.setProperty('--vmd-gutter-x', offset + 'px')
+  })
+}
+
+function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLine: number) {
+  let codeLines = (code.textContent || '').split('\n')
+  if (codeLines.length > 0 && codeLines[codeLines.length - 1] === '') codeLines.pop()
+  if (codeLines.length === 0) return
+
+  preview.style.position = 'relative'
+
+  const gutter = document.createElement('div')
+  gutter.className = 'vmd-code-gutter'
+  gutter.setAttribute('contenteditable', 'false')
+
+  // 让 gutter 的 line-height/font 跟 code 一致,数字逐行对齐
+  const cs = getComputedStyle(code)
+  gutter.style.lineHeight = cs.lineHeight
+  // font-size 用编辑器基本字号(不跟 code 字号绑死;但 line-height 必须跟 code 同步以逐行对齐)
+  // gutter 顶部跟 code 的 content 顶部对齐(避免 preview padding 偏移)
+  const codeRect = code.getBoundingClientRect()
+  const previewRect = preview.getBoundingClientRect()
+  gutter.style.top = (codeRect.top - previewRect.top) + 'px'
+
+  // 让 code gutter 跟其他 ::before 落到同一 X 列
+  const root = preview.closest('.vditor-reset') as HTMLElement | null
+  if (root) {
+    const rootRect = root.getBoundingClientRect()
+    const offset = -(previewRect.left - rootRect.left) + 5
+    gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
+  }
+
+  let html = ''
+  for (let i = 0; i < codeLines.length; i++) html += `<div>${contentStartLine + i}</div>`
+  gutter.innerHTML = html
+
+  preview.appendChild(gutter)
+}
+
+function markTableRows(table: HTMLElement, lines: string[], startIdx: number) {
+  const allTrs = Array.from(table.querySelectorAll('tr')) as HTMLElement[]
+  let si = startIdx, ti = 0
+  while (si < lines.length && ti < allTrs.length) {
+    const sl = lines[si]
+    if (!sl.startsWith('|')) break
+    if (/^\|[\s|:\-]+\|?\s*$/.test(sl)) { si++; continue }
+    const firstCell = allTrs[ti].querySelector('td, th') as HTMLElement | null
+    if (firstCell) firstCell.setAttribute('data-line', String(si + 1))
+    ti++; si++
+  }
+}
+
+function markListItems(listEl: HTMLElement, lines: string[], startIdx: number): number {
+  let si = startIdx
+  const items = Array.from(listEl.children).filter(c => c.tagName === 'LI') as HTMLElement[]
+  for (const li of items) {
+    while (si < lines.length) {
+      const t = lines[si].trimStart()
+      if (/^[*\-+] /.test(t) || /^\d+\. /.test(t)) break
+      si++
+    }
+    if (si >= lines.length) break
+    li.setAttribute('data-line', String(si + 1))
+    si++
+    const nested = Array.from(li.children).find(c => c.tagName === 'UL' || c.tagName === 'OL') as HTMLElement | undefined
+    if (nested) si = markListItems(nested, lines, si)
+  }
+  return si
 }
 
 function blockConsumed(line: string, lines: string[], startIdx: number): number {
@@ -144,148 +196,6 @@ function blockConsumed(line: string, lines: string[], startIdx: number): number 
   return c
 }
 
-function placeBlockNumbers(
-  child: HTMLElement,
-  firstLine: string,
-  startLine: number,
-  endLine: number,
-  lines: string[],
-  sourceIdx: number,
-  place: (n: number, top: number, refEl?: HTMLElement) => void,
-  topOf: (el: HTMLElement) => number,
-  lineRectsOf: (el: HTMLElement) => DOMRect[],
-  rootRect: DOMRect,
-  root: HTMLElement,
-) {
-  const ry = (rect: DOMRect) => rect.top - rootRect.top + root.scrollTop
-
-  // 代码块 — 用 Range.getClientRects() 直接拿 <code> 里每一行的精确矩形
-  if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
-    const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
-    if (preview) {
-      const code = preview.querySelector('code') as HTMLElement | null
-      if (code) {
-        const rects = lineRectsOf(code)
-        if (rects.length > 0) {
-          for (let i = 0; i < rects.length; i++) place(startLine + 1 + i, ry(rects[i]), code)
-          return
-        }
-      }
-    }
-    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
-    return
-  }
-
-  // 表格 — 每个 tr 用 Range 测它的第一行可视文字 Y
-  if (firstLine.startsWith('|')) {
-    const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table') as HTMLTableElement | null
-    if (table) {
-      const allTrs = Array.from(table.querySelectorAll('tr')) as HTMLElement[]
-      let si = sourceIdx, ti = 0
-      while (si < lines.length && ti < allTrs.length) {
-        const sl = lines[si]
-        if (!sl.startsWith('|')) break
-        if (/^\|[\s|:\-]+\|?\s*$/.test(sl)) { si++; continue }
-        const tr = allTrs[ti]
-        const rects = lineRectsOf(tr)
-        place(si + 1, rects.length > 0 ? ry(rects[0]) : topOf(tr), tr)
-        ti++; si++
-      }
-      return
-    }
-    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
-    return
-  }
-
-  // 列表 — 递归
-  if (/^[*\-+] /.test(firstLine) || /^\d+\. /.test(firstLine)) {
-    let listEl: HTMLElement | null = null
-    if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
-    else listEl = child.querySelector('ul, ol')
-    if (listEl) { walkListItems(listEl, lines, sourceIdx, place, topOf, lineRectsOf, ry); return }
-    stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
-    return
-  }
-
-  // 标题、HR — 单行,用 Range 拿第一行矩形 top
-  if (firstLine.startsWith('#') || /^---+$/.test(firstLine) || /^___+$/.test(firstLine) || /^\*\*\*+$/.test(firstLine)) {
-    const rects = lineRectsOf(child)
-    place(startLine, rects.length > 0 ? ry(rects[0]) : topOf(child), child)
-    return
-  }
-
-  // 段落、blockquote 等多行块 — 用 Range 拿每行矩形,按源行数匀分到这些矩形
-  stackBlock(child, startLine, endLine, place, topOf, lineRectsOf, ry)
-}
-
-function stackBlock(
-  child: HTMLElement,
-  startLine: number,
-  endLine: number,
-  place: (n: number, top: number, refEl?: HTMLElement) => void,
-  topOf: (el: HTMLElement) => number,
-  lineRectsOf: (el: HTMLElement) => DOMRect[],
-  ry: (r: DOMRect) => number,
-) {
-  const numLines = endLine - startLine + 1
-  const rects = lineRectsOf(child)
-
-  // 单行块直接对齐第一行可视矩形
-  if (numLines === 1) {
-    place(startLine, rects.length > 0 ? ry(rects[0]) : topOf(child), child)
-    return
-  }
-
-  // 源行数 == 可视行数 → 1:1 对齐 (常见:hard-wrap 段落)
-  if (rects.length === numLines) {
-    for (let i = 0; i < numLines; i++) place(startLine + i, ry(rects[i]), child)
-    return
-  }
-
-  // 源行数 != 可视行数 → 均匀分布在可视行的 Y 范围内 (常见:reflow 段落)
-  if (rects.length > 0) {
-    const topY = ry(rects[0])
-    const bottomY = ry(rects[rects.length - 1])
-    const span = bottomY - topY
-    if (numLines === 1) { place(startLine, topY, child); return }
-    const step = span / (numLines - 1)
-    for (let i = 0; i < numLines; i++) place(startLine + i, topY + i * step, child)
-    return
-  }
-
-  // 兜底:用块的 offsetHeight 平均分
-  const blockTop = topOf(child)
-  const blockHeight = child.offsetHeight
-  const step = blockHeight / numLines
-  for (let n = startLine; n <= endLine; n++) place(n, blockTop + (n - startLine) * step, child)
-}
-
-function walkListItems(
-  listEl: HTMLElement,
-  lines: string[],
-  startIdx: number,
-  place: (n: number, top: number, refEl?: HTMLElement) => void,
-  topOf: (el: HTMLElement) => number,
-  lineRectsOf: (el: HTMLElement) => DOMRect[],
-  ry: (r: DOMRect) => number,
-): number {
-  let si = startIdx
-  const items = Array.from(listEl.children).filter(c => c.tagName === 'LI') as HTMLElement[]
-  for (const li of items) {
-    while (si < lines.length) {
-      const t = lines[si].trimStart()
-      if (/^[*\-+] /.test(t) || /^\d+\. /.test(t)) break
-      si++
-    }
-    if (si >= lines.length) break
-    const rects = lineRectsOf(li)
-    place(si + 1, rects.length > 0 ? ry(rects[0]) : topOf(li), li)
-    si++
-    const nested = Array.from(li.children).find(c => c.tagName === 'UL' || c.tagName === 'OL') as HTMLElement | undefined
-    if (nested) si = walkListItems(nested, lines, si, place, topOf, lineRectsOf, ry)
-  }
-  return si
-}
 
 ;(window as any).__attachLineNumbers = attachLineNumbers
 

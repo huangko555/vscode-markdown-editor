@@ -128,32 +128,42 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset table tr {
   background-color: transparent !important;
 }
-/* 全局行号 gutter — 一个绝对定位的 overlay 容器,所有行号子 div 都在同一 X 列对齐
-   JS 计算每个数字的 top = 对应 DOM 元素相对 root 的 Y 偏移 */
+/* 行号:用 ::before 内联到每个元素,浏览器原生 line-box 机制保 baseline 严格对齐
+   JS 算每个元素的 --vmd-gutter-x(水平偏移),让所有 ::before 落到同一 X 列 */
 body.lineno-on .vditor-ir > .vditor-reset,
 body.lineno-on .vditor-wysiwyg > .vditor-reset {
   padding-left: 65px !important;
 }
-.vmd-line-gutter {
+body.lineno-on [data-line] {
+  position: relative;
+}
+body.lineno-on [data-line]::before {
+  content: attr(data-line);
   position: absolute;
-  left: 0;
+  left: var(--vmd-gutter-x, -65px);
   top: 0;
   width: 55px;
-  pointer-events: none;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, #6e7681);
+  font-size: var(--vscode-editor-font-size, 14px);
+  opacity: 0.9;
   user-select: none;
+  pointer-events: none;
+  line-height: inherit;
 }
-.vmd-line-gutter > div {
+
+/* 代码块 per-line gutter overlay(每行一个 div,line-height 跟 code 同步,1:1 对齐) */
+body.lineno-on .vmd-code-gutter {
   position: absolute;
-  left: 0;
-  width: 100%;
+  left: var(--vmd-gutter-x, -65px);
+  width: 55px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   opacity: 0.9;
-  font-size: var(--vscode-editor-font-size, 14px);
-  /* line-height 跟正文一致 — baseline 跟目标文字对齐 */
-  line-height: inherit;
+  user-select: none;
+  pointer-events: none;
 }
-body:not(.lineno-on) .vmd-line-gutter {
+body:not(.lineno-on) .vmd-code-gutter {
   display: none;
 }
 
