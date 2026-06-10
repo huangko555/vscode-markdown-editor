@@ -136,13 +136,18 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-wysiwyg > .vditor-reset > [data-line] {
   position: relative;
 }
+/* 行号开启时,内容区左 padding 加大,给 gutter 留位置 */
+body.lineno-on .vditor-ir > .vditor-reset,
+body.lineno-on .vditor-wysiwyg > .vditor-reset {
+  padding-left: 65px !important;
+}
 body.lineno-on .vditor-ir > .vditor-reset > [data-line]::after,
 body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
   content: attr(data-line);
   position: absolute;
-  left: -35px;
+  left: -60px;
   bottom: 0;             /* 底对齐 */
-  width: 28px;
+  width: 52px;           /* 装得下 "100-200" 这种区间 */
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   user-select: none;

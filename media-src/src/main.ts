@@ -56,7 +56,7 @@ function attachLineNumbers() {
     if (sourceIdx >= lines.length) break
 
     const child = children[domIdx]
-    child.setAttribute('data-line', String(sourceIdx + 1))
+    const startLine = sourceIdx + 1
 
     const line = lines[sourceIdx]
     let consumed = 1
@@ -79,6 +79,9 @@ function attachLineNumbers() {
     } else if (!line.startsWith('#') && !/^---+$/.test(line) && !/^___+$/.test(line) && !/^\*\*\*+$/.test(line)) {
       while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].trim() !== '') consumed++
     }
+
+    const endLine = sourceIdx + consumed
+    child.setAttribute('data-line', startLine === endLine ? String(startLine) : `${startLine}-${endLine}`)
 
     sourceIdx += consumed
     domIdx++
