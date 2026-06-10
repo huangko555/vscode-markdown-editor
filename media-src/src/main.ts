@@ -228,16 +228,21 @@ function findSourceLineYsByText(el: HTMLElement, sourceLines: string[]): number[
     return fullText.indexOf(sig, from)
   }
 
+  // 从 pos 往后扫,直到找到一个真正可视(非 hidden marker)的字符,返回它的 Y
+  // vditor IR 把 ** > 等 markdown 标记藏在 width:0 height:0 的 span 里,
+  // 命中这些字符时 Range bounding rect height 是 0,要跳过它们找到下一个真实文字
   const getYAt = (pos: number, sigLen: number): { y: number; endPos: number } | null => {
-    const node = findNodeAtTextPos(el, pos)
-    if (!node) return null
-    try {
-      const range = document.createRange()
-      range.setStart(node.node, node.offset)
-      range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
-      const rect = range.getBoundingClientRect()
-      if (rect.height > 0) return { y: rect.top, endPos: pos + sigLen }
-    } catch {}
+    for (let off = 0; off < 40; off++) {
+      const node = findNodeAtTextPos(el, pos + off)
+      if (!node) continue
+      try {
+        const range = document.createRange()
+        range.setStart(node.node, node.offset)
+        range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
+        const rect = range.getBoundingClientRect()
+        if (rect.height > 0 && rect.width > 0) return { y: rect.top, endPos: pos + sigLen }
+      } catch {}
+    }
     return null
   }
 
