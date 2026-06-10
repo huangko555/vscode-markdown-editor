@@ -60,3 +60,5 @@ typings/
 lib
 *.vsix
 out
+# 装依赖时 npm 会生成,跟 pnpm-lock.yaml 二选一,不入仓避免冲突
+media-src/package-lock.json

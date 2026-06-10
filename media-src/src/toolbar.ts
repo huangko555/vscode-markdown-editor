@@ -3,6 +3,23 @@ import { confirm } from "./utils"
 
 export const toolbar = [
 	'outline',
+	{
+		name: 'toggle-lineno',
+		tipPosition: 's',
+		tip: t('toggleLineNumbers'),
+		className: 'vmd-lineno-btn',
+		icon:
+			'<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor"><text x="1" y="8" font-size="7" font-family="ui-monospace,Menlo,monospace" font-weight="700">1</text><text x="1" y="15" font-size="7" font-family="ui-monospace,Menlo,monospace" font-weight="700">2</text><text x="1" y="22" font-size="7" font-family="ui-monospace,Menlo,monospace" font-weight="700">3</text><rect x="9" y="5" width="14" height="2"/><rect x="9" y="12" width="14" height="2"/><rect x="9" y="19" width="11" height="2"/></svg>',
+		click() {
+			const on = document.body.classList.toggle('lineno-on')
+			try { localStorage.setItem('vditor-md.lineno', on ? '1' : '0') } catch {}
+			if (on) {
+				;(window as any).__attachLineNumbers && (window as any).__attachLineNumbers()
+			} else {
+				;(window as any).__detachLineNumbers && (window as any).__detachLineNumbers()
+			}
+		},
+	},
 	'|',
 	{
 		hotkey: '⌘s',
@@ -56,15 +73,6 @@ export const toolbar = [
 				click() {
 					const on = document.body.classList.toggle('zebra-on')
 					try { localStorage.setItem('vditor-md.zebra', on ? '1' : '0') } catch {}
-				},
-			},
-			{
-				name: 'toggle-lineno',
-				icon: t('toggleLineNumbers'),
-				click() {
-					const on = document.body.classList.toggle('lineno-on')
-					try { localStorage.setItem('vditor-md.lineno', on ? '1' : '0') } catch {}
-					if (on && (window as any).__attachLineNumbers) (window as any).__attachLineNumbers()
 				},
 			},
 			'both',

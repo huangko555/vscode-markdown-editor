@@ -99,6 +99,11 @@
     ]
   },
   "scripts": {
+    "compile": "tsc -p ./",
+    "build:media": "npm --prefix media-src run build",
+    "build": "npm run compile && npm run build:media",
+    "vscode:prepublish": "npm run build",
+    "package": "npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository",
     "watch": "foy watch",
     "start": "foy watch",
     "pub": "foy build && npm version patch && git push origin master --tags && vsce package && vsce publish"

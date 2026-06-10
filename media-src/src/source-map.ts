@@ -101,8 +101,11 @@ function align(domEls: Element[], blocks: BlockNode[]): number {
   while (di < domEls.length && bi < blocks.length) {
     const dom = domEls[di]
     if (isMarkerEl(dom)) { di++; continue }
-    const blk = blocks[bi]
     const tag = dom.tagName.toLowerCase()
+    // vditor IR 给源里的纯空行也渲染了空 <p> 占位,而 markdown-it 不为纯空行生成 token,
+    // DOM 数量多于 token 数量 → 贪婪匹配会把后面段落的行号标到前面的空 p 上,真文字 p 反而漏标
+    if (tag === 'p' && !(dom.textContent || '').trim()) { di++; continue }
+    const blk = blocks[bi]
     if (matches(tag, blk.tag)) {
       if (isShowable(dom)) {
         dom.setAttribute('data-source-line', String(blk.lineStart + 1))

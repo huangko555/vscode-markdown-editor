@@ -7,6 +7,8 @@ import {
   fixLinkClick,
   fixPanelHover,
   handleToolbarClick,
+  fixOutlineCloseScroll,
+  getVisibleEditorRoot,
   saveVditorOptions,
 } from './utils'
 
@@ -20,29 +22,28 @@ import { fixTableIr } from './fix-table-ir'
 import { injectSourceLines } from './source-map'
 import './main.css'
 
-// restore zebra toggle state (default OFF)
+// restore zebra toggle state (default ON;only explicit '0' keeps off)
 try {
-  if (localStorage.getItem('vditor-md.zebra') === '1') {
+  if (localStorage.getItem('vditor-md.zebra') !== '0') {
     document.body.classList.add('zebra-on')
   }
-} catch {}
+} catch {
+  document.body.classList.add('zebra-on')
+}
 
-// restore lineno toggle state (default ON)
+// restore lineno toggle state (default OFF)
 try {
-  if (localStorage.getItem('vditor-md.lineno') !== '0') {
+  if (localStorage.getItem('vditor-md.lineno') === '1') {
     document.body.classList.add('lineno-on')
   }
-} catch {
-  document.body.classList.add('lineno-on')
-}
+} catch {}
 
 // 行号映射:用 markdown-it 解析源 md 拿 token.map 源行号,注入到 vditor DOM 的 data-source-line
 // 再算每个标了 data-source-line 的元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列
 function attachLineNumbers() {
   if (!(window as any).vditor) return
-  const roots = document.querySelectorAll<HTMLElement>('.vditor-reset[contenteditable="true"]')
-  let root: HTMLElement | null = null
-  roots.forEach((r) => { if (r.offsetParent !== null) root = r })
+  if (!document.body.classList.contains('lineno-on')) return
+  const root = getVisibleEditorRoot()
   if (!root) return
 
   // 清掉旧 gutter overlay(代码块/多行段落都是独立 div,需要每次重建)
@@ -241,7 +242,32 @@ function getCharRect(el: HTMLElement, charIndex: number): DOMRect | null {
   return null
 }
 
-;(window as any).__attachLineNumbers = attachLineNumbers
+// vditor 在 input/回车/删除后会异步 mutation 重渲染 DOM,我们的 overlay 会被擦掉、[data-source-line] 也变。
+// 用 MutationObserver 监听 root 内变化,rAF 合并多次 mutation,自动重 attach。防自身触发:每次 attach 前 disconnect、attach 后 reconnect。
+let lineMo: MutationObserver | null = null
+let attachRafId: number | null = null
+function scheduleAttach() {
+  if (attachRafId != null) return
+  attachRafId = requestAnimationFrame(() => {
+    attachRafId = null
+    lineMo?.disconnect()
+    attachLineNumbers()
+    bindLineMo()
+  })
+}
+function bindLineMo() {
+  if (!document.body.classList.contains('lineno-on')) return
+  const root = getVisibleEditorRoot()
+  if (!root) return
+  if (!lineMo) lineMo = new MutationObserver(scheduleAttach)
+  lineMo.observe(root, { childList: true, subtree: true, characterData: true })
+}
+function detachLineMo() {
+  lineMo?.disconnect()
+  if (attachRafId != null) { cancelAnimationFrame(attachRafId); attachRafId = null }
+}
+;(window as any).__attachLineNumbers = scheduleAttach
+;(window as any).__detachLineNumbers = detachLineMo
 
 
 function initVditor(msg) {
@@ -289,13 +315,15 @@ function initVditor(msg) {
       handleToolbarClick()
       fixTableIr()
       fixPanelHover()
+      fixOutlineCloseScroll()
       attachLineNumbers()
+      bindLineMo()
       // 窗口/容器尺寸变化时重算行号(wrap 行数/位置会变,绝对定位的 overlay 必须跟着重排)
-      // debounce 50ms 避免拖拽 resize 时高频重算
+      // debounce 50ms 避免拖拽 resize 时高频重算;走 scheduleAttach 让 MutationObserver disconnect/reconnect 配套
       let resizeTimer: any = null
       const scheduleReattach = () => {
         if (resizeTimer) clearTimeout(resizeTimer)
-        resizeTimer = setTimeout(() => attachLineNumbers(), 50)
+        resizeTimer = setTimeout(scheduleAttach, 50)
       }
       const editor = document.getElementById('app')
       if (editor && typeof ResizeObserver !== 'undefined') {
@@ -306,7 +334,7 @@ function initVditor(msg) {
       }
     },
     input() {
-      attachLineNumbers()
+      scheduleAttach()
       inputTimer && clearTimeout(inputTimer)
       inputTimer = setTimeout(() => {
         vscode.postMessage({ command: 'edit', content: vditor.getValue() })
