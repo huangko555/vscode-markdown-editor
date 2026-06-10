@@ -23,22 +23,14 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor--dark .vditor-reset code:not(.hljs):not(.highlight-chroma) {
   background-color: rgba(66,133,244,.1);
 }
-/* fenced code block bg follows current VS Code theme via injected CSS var
-   — overrides whatever bg the loaded hljs theme (monokai) brings
-   — bg 放到 wrapper 上,而不是 pre/code 上,这样横向滚动时 bg 固定在视口不跟着滚 */
+/* fenced code block bg — solid uniform on the pre itself.
+   pre 在 wrapper 里 min-width: 100% 强制至少撑满可视区宽,所以横向滚动时
+   pre 的 bg 总是铺满视口(pre 比可视区更宽),不可能出现"露出下层 bg"的情况。
+   wrapper 本身不放 bg,只管裁剪/滚动 */
 .vditor-reset pre code,
 .vditor-reset pre code.hljs,
 .vditor-reset pre.hljs {
   background-color: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)) !important;
-}
-.hkq-code-scroll {
-  background-color: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
-}
-.hkq-code-scroll pre,
-.hkq-code-scroll pre.hljs,
-.hkq-code-scroll pre code,
-.hkq-code-scroll pre code.hljs {
-  background-color: transparent !important;
 }
 
 /* IR mode: 光标进代码块时,vditor 默认同时显示"可编辑源 + 渲染预览"两块,造成上下两部分
@@ -60,9 +52,13 @@ body[data-use-vscode-theme-color="1"] .vditor {
   overflow-x: auto;       /* 横向有内容超出时显示横向滚动条 */
   padding-bottom: 2px;    /* 给滚动条腾位置,避免触发额外的纵向滚动 */
   max-width: 100%;
+  /* wrapper 不放 bg — 让 pre 自己持有,避免双层 bg 透叠 */
 }
 .hkq-code-scroll > pre {
-  margin: 0 !important;   /* wrapper 自己带 margin/padding,pre 重置 */
+  margin: 0 !important;
+  min-width: 100%;        /* 至少撑满可视区,pre 的 bg 总是铺满视口 */
+  box-sizing: border-box;
+  display: block;
 }
 /* center toolbar horizontally within window
    vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
