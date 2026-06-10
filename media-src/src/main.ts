@@ -42,11 +42,9 @@ function initVditor(msg) {
     defaultOptions.theme = 'dark'
     defaultOptions.preview = defaultOptions.preview || {}
     defaultOptions.preview.theme = { current: 'dark' }
-    // dark hljs theme so fenced code blocks don't render with glaring white bg
-    // valid dark themes in vditor 3.8.4 CODE_THEME list:
-    //   dracula / monokai / native / paraiso-dark / solarized-dark / solarized-dark256 / vim
-    // !! 'github-dark' is NOT in the list and would silently fall back to 'github' (light)
-    defaultOptions.preview.hljs = { style: 'dracula' }
+    // hljs 只负责 token 高亮配色(关键字/字符串/数字色),代码块底色由 main.css 用 VS Code 变量覆盖
+    // monokai 选这一个就因为它的 token 色在任意深色 VS Code 主题下都还能看,不抢眼
+    defaultOptions.preview.hljs = { style: 'monokai' }
   } else if (msg.theme === 'light') {
     defaultOptions.theme = 'classic'
     defaultOptions.preview = defaultOptions.preview || {}
