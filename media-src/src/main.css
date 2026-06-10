@@ -145,25 +145,39 @@ body.lineno-on [data-line]::before {
   width: 55px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  font-size: var(--vscode-editor-font-size, 14px);
+  /* font-size 跟父元素同步 — 浏览器 line-box 机制保证 baseline 严格对齐 */
+  font-size: inherit;
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
   line-height: inherit;
 }
 
-/* 代码块 per-line gutter overlay(每行一个 div,line-height 跟 code 同步,1:1 对齐) */
-body.lineno-on .vmd-code-gutter {
+/* 代码块 + 多行段落 per-line gutter overlay
+   数字 div 各自带 style="top: <Y>px" (JS 用 Range 实测每行 Y),严格 1:1 对齐每行 */
+body.lineno-on .vmd-code-gutter,
+body.lineno-on .vmd-block-gutter {
   position: absolute;
   left: var(--vmd-gutter-x, -65px);
+  top: 0;
   width: 55px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
+  font-size: var(--vscode-editor-font-size, 14px);
 }
-body:not(.lineno-on) .vmd-code-gutter {
+body.lineno-on .vmd-code-gutter > div,
+body.lineno-on .vmd-block-gutter > div {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  text-align: right;
+  line-height: 1;
+}
+body:not(.lineno-on) .vmd-code-gutter,
+body:not(.lineno-on) .vmd-block-gutter {
   display: none;
 }
 

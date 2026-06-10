@@ -47,9 +47,9 @@ function attachLineNumbers() {
   const md: string = (window as any).vditor.getValue()
   const lines = md.split('\n')
 
-  // 清掉旧的 data-line 和 code gutter
+  // 清掉旧的 data-line 和各种 gutter overlay
   root.querySelectorAll('[data-line]').forEach(el => el.removeAttribute('data-line'))
-  root.querySelectorAll('.vmd-code-gutter, .vmd-line-gutter').forEach(el => el.remove())
+  root.querySelectorAll('.vmd-code-gutter, .vmd-block-gutter, .vmd-line-gutter').forEach(el => el.remove())
 
   const children = Array.from(root.children) as HTMLElement[]
   let sourceIdx = 0
@@ -90,8 +90,13 @@ function attachLineNumbers() {
       if (listEl) markListItems(listEl, lines, sourceIdx)
       else child.setAttribute('data-line', labelText)
     } else {
-      // 标题、段落、HR、blockquote 等:单一 data-line(多行段落用 range)
-      child.setAttribute('data-line', labelText)
+      // 标题、HR — 单源行用 data-line + ::before
+      // 多源行段落/blockquote — 用 per-line gutter overlay(Range 实测每行 Y)
+      if (endLine === startLine) {
+        child.setAttribute('data-line', String(startLine))
+      } else {
+        buildBlockGutter(child, startLine, endLine)
+      }
     }
 
     sourceIdx += consumed
@@ -108,38 +113,123 @@ function attachLineNumbers() {
 }
 
 function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLine: number) {
-  let codeLines = (code.textContent || '').split('\n')
-  if (codeLines.length > 0 && codeLines[codeLines.length - 1] === '') codeLines.pop()
-  if (codeLines.length === 0) return
+  const text = code.textContent || ''
+  let sourceLines = text.split('\n')
+  if (sourceLines.length > 0 && sourceLines[sourceLines.length - 1] === '') sourceLines.pop()
+  if (sourceLines.length === 0) return
 
   preview.style.position = 'relative'
+
+  // 用 Range 实测每源行第一个字符的 Y(自动处理 wrap)
+  const lineYs: number[] = []
+  let charPos = 0
+  for (let i = 0; i < sourceLines.length; i++) {
+    const rect = getCharRect(code, charPos)
+    if (rect) lineYs.push(rect.top)
+    charPos += sourceLines[i].length + 1 // +1 for \n
+  }
+  if (lineYs.length === 0) return
+
+  const previewRect = preview.getBoundingClientRect()
+  const root = preview.closest('.vditor-reset') as HTMLElement | null
+  if (!root) return
+  const rootRect = root.getBoundingClientRect()
 
   const gutter = document.createElement('div')
   gutter.className = 'vmd-code-gutter'
   gutter.setAttribute('contenteditable', 'false')
-
-  // 让 gutter 的 line-height/font 跟 code 一致,数字逐行对齐
-  const cs = getComputedStyle(code)
-  gutter.style.lineHeight = cs.lineHeight
-  // font-size 用编辑器基本字号(不跟 code 字号绑死;但 line-height 必须跟 code 同步以逐行对齐)
-  // gutter 顶部跟 code 的 content 顶部对齐(避免 preview padding 偏移)
-  const codeRect = code.getBoundingClientRect()
-  const previewRect = preview.getBoundingClientRect()
-  gutter.style.top = (codeRect.top - previewRect.top) + 'px'
-
-  // 让 code gutter 跟其他 ::before 落到同一 X 列
-  const root = preview.closest('.vditor-reset') as HTMLElement | null
-  if (root) {
-    const rootRect = root.getBoundingClientRect()
-    const offset = -(previewRect.left - rootRect.left) + 5
-    gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
-  }
+  const offset = -(previewRect.left - rootRect.left) + 5
+  gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
 
   let html = ''
-  for (let i = 0; i < codeLines.length; i++) html += `<div>${contentStartLine + i}</div>`
+  for (let i = 0; i < lineYs.length; i++) {
+    const relY = lineYs[i] - previewRect.top
+    html += `<div style="top:${relY}px">${contentStartLine + i}</div>`
+  }
   gutter.innerHTML = html
-
   preview.appendChild(gutter)
+}
+
+// 多源行段落:per-line gutter,数字 Y 用 Range.getClientRects() 实测
+function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
+  const numLines = endLine - startLine + 1
+
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const rects: DOMRect[] = []
+  const all = range.getClientRects()
+  for (let i = 0; i < all.length; i++) {
+    if (all[i].height > 0 && all[i].width > 0) rects.push(all[i] as DOMRect)
+  }
+  if (rects.length === 0) {
+    el.setAttribute('data-line', `${startLine}-${endLine}`)
+    return
+  }
+
+  const root = el.closest('.vditor-reset') as HTMLElement | null
+  if (!root) return
+  const rootRect = root.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
+
+  el.style.position = 'relative'
+
+  const gutter = document.createElement('div')
+  gutter.className = 'vmd-block-gutter'
+  gutter.setAttribute('contenteditable', 'false')
+  const offset = -(elRect.left - rootRect.left) + 5
+  gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
+
+  let html = ''
+  if (rects.length === numLines) {
+    // 1:1 (hard-wrap 段落,每源行 = 一个 <br> 分隔的可视行)
+    for (let i = 0; i < numLines; i++) {
+      html += `<div style="top:${rects[i].top - elRect.top}px">${startLine + i}</div>`
+    }
+  } else {
+    // reflow 段落 — 在可视行 Y 范围内均匀分布
+    const topY = rects[0].top - elRect.top
+    const bottomY = rects[rects.length - 1].top - elRect.top
+    const span = bottomY - topY
+    for (let i = 0; i < numLines; i++) {
+      const y = numLines === 1 ? topY : topY + (span / (numLines - 1)) * i
+      html += `<div style="top:${y}px">${startLine + i}</div>`
+    }
+  }
+  gutter.innerHTML = html
+  el.appendChild(gutter)
+}
+
+// 在 element 内,找第 charIndex 个字符(忽略 element 类型只看文本流)的 Range bounding rect
+function getCharRect(el: HTMLElement, charIndex: number): DOMRect | null {
+  let count = 0
+  let found: { node: Text; offset: number } | null = null
+  function walk(node: Node): boolean {
+    if (found) return true
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || ''
+      if (count + text.length > charIndex) {
+        found = { node: node as Text, offset: charIndex - count }
+        return true
+      }
+      count += text.length
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        if (walk(node.childNodes[i])) return true
+      }
+    }
+    return false
+  }
+  walk(el)
+  if (!found) return null
+  try {
+    const range = document.createRange()
+    const { node: txt, offset: off } = found as { node: Text; offset: number }
+    range.setStart(txt, off)
+    range.setEnd(txt, Math.min(off + 1, (txt.textContent || '').length))
+    const r = range.getBoundingClientRect()
+    if (r.height > 0) return r as DOMRect
+  } catch {}
+  return null
 }
 
 function markTableRows(table: HTMLElement, lines: string[], startIdx: number) {
@@ -252,7 +342,7 @@ function initVditor(msg) {
       inputTimer = setTimeout(() => {
         vscode.postMessage({ command: 'edit', content: vditor.getValue() })
         attachLineNumbers()
-      }, 100)
+      }, 30)
     },
     upload: {
       url: '/fuzzy', // 没有 url 参数粘贴图片无法上传 see: https://github.com/Vanessa219/vditor/blob/d7628a0a7cfe5d28b055469bf06fb0ba5cfaa1b2/src/ts/util/fixBrowserBehavior.ts#L1409
