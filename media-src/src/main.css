@@ -74,6 +74,13 @@ body[data-use-vscode-theme-color="1"] .vditor {
   padding-left: 35px !important;
 }
 
+/* make outline panel resizable horizontally (default width 250px preserved) */
+.vditor-outline {
+  resize: horizontal !important;
+  min-width: 150px !important;
+  max-width: 600px !important;
+}
+
 /* heading colors — uniform blue across all levels */
 .vditor-reset h1, .vditor-reset h2, .vditor-reset h3,
 .vditor-reset h4, .vditor-reset h5, .vditor-reset h6,
