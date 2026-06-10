@@ -23,10 +23,7 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor--dark .vditor-reset code:not(.hljs):not(.highlight-chroma) {
   background-color: rgba(66,133,244,.1);
 }
-/* fenced code block bg — solid uniform on the pre itself.
-   pre 在 wrapper 里 min-width: 100% 强制至少撑满可视区宽,所以横向滚动时
-   pre 的 bg 总是铺满视口(pre 比可视区更宽),不可能出现"露出下层 bg"的情况。
-   wrapper 本身不放 bg,只管裁剪/滚动 */
+/* fenced code block 默认 bg(非 wrapper 上下文用,例如行内嵌套等极少数情况) */
 .vditor-reset pre code,
 .vditor-reset pre code.hljs,
 .vditor-reset pre.hljs {
@@ -49,14 +46,25 @@ body[data-use-vscode-theme-color="1"] .vditor {
   overflow: visible !important;
 }
 .hkq-code-scroll {
-  overflow-x: auto;       /* 横向有内容超出时显示横向滚动条 */
-  padding-bottom: 2px;    /* 给滚动条腾位置,避免触发额外的纵向滚动 */
+  overflow-x: auto;
+  padding-bottom: 2px;
   max-width: 100%;
-  /* wrapper 不放 bg — 让 pre 自己持有,避免双层 bg 透叠 */
+  /* 关键:bg 用 实底色 + opaque tint linear-gradient 叠成完全不透明的 distinct 色
+     不依赖 textCodeBlock-background 这种半透明 var,避免下层 editor bg 的 line-highlight / selection 等
+     效果"漏"上来 */
+  background-color: var(--vscode-editor-background);
+  background-image: linear-gradient(rgba(128, 128, 128, 0.12), rgba(128, 128, 128, 0.12));
+}
+.hkq-code-scroll pre,
+.hkq-code-scroll pre.hljs,
+.hkq-code-scroll pre code,
+.hkq-code-scroll pre code.hljs {
+  background-color: transparent !important;
+  background-image: none !important;
 }
 .hkq-code-scroll > pre {
   margin: 0 !important;
-  min-width: 100%;        /* 至少撑满可视区,pre 的 bg 总是铺满视口 */
+  min-width: 100%;
   box-sizing: border-box;
   display: block;
 }
