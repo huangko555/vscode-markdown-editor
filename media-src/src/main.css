@@ -23,10 +23,17 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor--dark .vditor-reset code:not(.hljs):not(.highlight-chroma) {
   background-color: rgba(66,133,244,.1);
 }
-/* center toolbar horizontally within window */
+/* center toolbar horizontally within window
+   vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
 .vditor-toolbar.vditor-toolbar--pin {
-  justify-content: center!important;
+  text-align: center!important;
   padding-left: 0!important;
+}
+.vditor-toolbar.vditor-toolbar--pin > .vditor-toolbar__item,
+.vditor-toolbar.vditor-toolbar--pin > .vditor-toolbar__divider {
+  float: none!important;
+  display: inline-block!important;
+  vertical-align: middle!important;
 }
 .vditor-ir pre.vditor-reset {
   position: relative;
