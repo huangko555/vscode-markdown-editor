@@ -194,6 +194,24 @@ body.lineno-on table td[data-line]::before {
 body.lineno-on [data-line-detail][data-line]::after {
   display: none;
 }
+/* 列表 per-item 行号:每个 li 都标源行号(嵌套子列表递归) */
+body.lineno-on li[data-line] {
+  position: relative;
+}
+body.lineno-on li[data-line]::before {
+  content: attr(data-line);
+  position: absolute;
+  left: -55px;
+  top: 0;
+  width: 50px;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, #6e7681);
+  opacity: 0.9;
+  font-size: var(--vscode-editor-font-size, 14px);
+  user-select: none;
+  pointer-events: none;
+  line-height: inherit;
+}
 body.lineno-on .vditor-ir > .vditor-reset > [data-line]::after,
 body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
   content: attr(data-line);

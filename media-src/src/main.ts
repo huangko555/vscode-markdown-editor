@@ -93,6 +93,48 @@ function attachLineNumbers() {
   attachCodeBlockGutters()
   // 表格走 per-row,每个 tr 的源行号挂在第一个 td/th 上
   attachTableRowLines(lines, root)
+  // 列表走 per-item,递归处理嵌套
+  attachListItemLines(lines, root)
+}
+
+function attachListItemLines(lines: string[], root: HTMLElement) {
+  const topLevelChildren = Array.from(root.children) as HTMLElement[]
+  topLevelChildren.forEach((child) => {
+    if (!child.hasAttribute('data-line')) return
+    const range = child.getAttribute('data-line') || ''
+    const startLine = parseInt(range.split('-')[0])
+    if (isNaN(startLine)) return
+
+    let listEl: HTMLElement | null = null
+    if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
+    else listEl = child.querySelector('ul, ol')
+    if (!listEl) return
+
+    listEl.querySelectorAll('li[data-line]').forEach((el) => el.removeAttribute('data-line'))
+    assignListLinesRecursive(listEl, lines, startLine - 1)
+    child.setAttribute('data-line-detail', '1')
+  })
+}
+
+function assignListLinesRecursive(listEl: HTMLElement, sourceLines: string[], startIdx: number): number {
+  let sourceIdx = startIdx
+  const items = Array.from(listEl.children).filter((el) => el.tagName === 'LI') as HTMLElement[]
+
+  for (const li of items) {
+    while (sourceIdx < sourceLines.length) {
+      const trimmed = sourceLines[sourceIdx].trimStart()
+      if (/^[*\-+] /.test(trimmed) || /^\d+\. /.test(trimmed)) break
+      sourceIdx++
+    }
+    if (sourceIdx >= sourceLines.length) break
+
+    li.setAttribute('data-line', String(sourceIdx + 1))
+    sourceIdx++
+
+    const nestedList = Array.from(li.children).find((el) => el.tagName === 'UL' || el.tagName === 'OL') as HTMLElement | undefined
+    if (nestedList) sourceIdx = assignListLinesRecursive(nestedList, sourceLines, sourceIdx)
+  }
+  return sourceIdx
 }
 
 function attachTableRowLines(lines: string[], root: HTMLElement) {
