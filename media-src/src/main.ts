@@ -98,7 +98,7 @@ function attachLineNumbers() {
         }
         target.setAttribute('data-line', String(startLine))
       } else {
-        buildBlockGutter(child, startLine, endLine)
+        buildBlockGutter(child, startLine, endLine, lines)
       }
     }
 
@@ -162,49 +162,25 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
 }
 
 // 多源行块:per-line gutter
-// 每个源行的 Y = 第一行可视文字 / <br> 后第一行 / 嵌套 block 元素第一行
-function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
+// 用每个源行的文本签名在元素 textContent 里搜索它的位置,再映射回 DOM 找 Y
+// — 不依赖 DOM 结构(<br>/嵌套 block),只要文字在就找得到
+function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number, allLines: string[]) {
   const numLines = endLine - startLine + 1
+  const sourceLines = allLines.slice(startLine - 1, endLine)
 
-  const lineYs: number[] = []
+  let lineYs = findSourceLineYsByText(el, sourceLines)
 
-  // 第 1 行 Y
-  const fullRange = document.createRange()
-  fullRange.selectNodeContents(el)
-  const allRects = fullRange.getClientRects()
-  for (let i = 0; i < allRects.length; i++) {
-    const r = allRects[i]
-    if (r.height > 0 && r.width > 0) { lineYs.push(r.top); break }
-  }
-
-  // <br> 之后的下一行 Y
-  el.querySelectorAll('br').forEach((br) => {
-    const rect = firstVisibleRectAfter(br)
-    if (rect) lineYs.push(rect.top)
-  })
-
-  // 嵌套 block 元素(p / div / blockquote 等),除了第 1 个之外都是新源行
-  const blockTags = ['P', 'DIV', 'BLOCKQUOTE', 'PRE']
-  const innerBlocks = Array.from(el.children).filter(c => blockTags.includes(c.tagName))
-  innerBlocks.forEach((blk, idx) => {
-    if (idx === 0) return  // 第 1 个 block 的 Y 已在 lineYs[0]
-    const range = document.createRange()
-    range.selectNodeContents(blk)
-    const rects = range.getClientRects()
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i]
-      if (r.height > 0 && r.width > 0) { lineYs.push(r.top); break }
+  // 如果文本搜索失败,fallback 用结构(<br> / 嵌套 block)
+  if (lineYs.length < numLines) {
+    const structureYs = findSourceLineYsByStructure(el)
+    const merged = [...lineYs, ...structureYs]
+    merged.sort((a, b) => a - b)
+    const dedup: number[] = []
+    for (const y of merged) {
+      if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
     }
-  })
-
-  // 排序 + dedup(2px 内视为同一行)
-  lineYs.sort((a, b) => a - b)
-  const dedup: number[] = []
-  for (const y of lineYs) {
-    if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
+    if (dedup.length > lineYs.length) lineYs = dedup
   }
-  lineYs.length = 0
-  lineYs.push(...dedup)
 
   if (lineYs.length === 0) {
     el.setAttribute('data-line', `${startLine}-${endLine}`)
@@ -237,6 +213,108 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   }
   gutter.innerHTML = html
   el.appendChild(gutter)
+}
+
+// 用源行文字签名在元素文本里搜索每行的 Y
+function findSourceLineYsByText(el: HTMLElement, sourceLines: string[]): number[] {
+  const ys: number[] = []
+
+  // 提取每源行的"签名" — 去掉前导 markdown 标记符,取前 15 个字符
+  const sigs = sourceLines.map(line => {
+    let s = line.trim()
+    s = s.replace(/^[>#\-*+]+\s*/, '')      // 前导 > # - * +
+    s = s.replace(/^\d+\.\s+/, '')          // 前导 1. 2.
+    s = s.replace(/\*\*|\*|__|_|`|~/g, '')  // 内联 markdown 标记
+    return s.trim().substring(0, 15)
+  })
+
+  const fullText = el.textContent || ''
+  let lastPos = 0
+  for (let i = 0; i < sigs.length; i++) {
+    const sig = sigs[i]
+    if (sig.length === 0) {
+      ys.push(ys[i - 1] || 0)
+      continue
+    }
+    const pos = fullText.indexOf(sig, lastPos)
+    if (pos < 0) {
+      ys.push(ys[i - 1] || 0)
+      continue
+    }
+    const node = findNodeAtTextPos(el, pos)
+    if (node) {
+      try {
+        const range = document.createRange()
+        range.setStart(node.node, node.offset)
+        range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
+        const rect = range.getBoundingClientRect()
+        ys.push(rect.height > 0 ? rect.top : (ys[i - 1] || 0))
+      } catch {
+        ys.push(ys[i - 1] || 0)
+      }
+    } else {
+      ys.push(ys[i - 1] || 0)
+    }
+    lastPos = pos + sig.length
+  }
+  return ys
+}
+
+// 找 textContent 拼接里第 targetPos 个字符所在的 (TextNode, offset)
+function findNodeAtTextPos(el: HTMLElement, targetPos: number): { node: Text; offset: number } | null {
+  let count = 0
+  let result: { node: Text; offset: number } | null = null
+  function walk(node: Node): boolean {
+    if (result) return true
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || ''
+      if (count + text.length > targetPos) {
+        result = { node: node as Text, offset: targetPos - count }
+        return true
+      }
+      count += text.length
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        if (walk(node.childNodes[i])) return true
+      }
+    }
+    return false
+  }
+  walk(el)
+  return result
+}
+
+// 结构化方式找源行 Y(<br>/嵌套块)— 作为 text-search 的 fallback
+function findSourceLineYsByStructure(el: HTMLElement): number[] {
+  const ys: number[] = []
+  const fullRange = document.createRange()
+  fullRange.selectNodeContents(el)
+  const allRects = fullRange.getClientRects()
+  for (let i = 0; i < allRects.length; i++) {
+    const r = allRects[i]
+    if (r.height > 0 && r.width > 0) { ys.push(r.top); break }
+  }
+  el.querySelectorAll('br').forEach(br => {
+    const rect = firstVisibleRectAfter(br)
+    if (rect) ys.push(rect.top)
+  })
+  const blockTags = ['P', 'DIV', 'BLOCKQUOTE', 'PRE']
+  Array.from(el.children).filter(c => blockTags.includes(c.tagName)).forEach((blk, idx) => {
+    if (idx === 0) return
+    const range = document.createRange()
+    range.selectNodeContents(blk)
+    const rects = range.getClientRects()
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i]
+      if (r.height > 0 && r.width > 0) { ys.push(r.top); break }
+    }
+  })
+  ys.sort((a, b) => a - b)
+  const dedup: number[] = []
+  for (const y of ys) {
+    if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
+  }
+  return dedup
 }
 
 // 找一个节点之后第一个有可视矩形的文字/元素
