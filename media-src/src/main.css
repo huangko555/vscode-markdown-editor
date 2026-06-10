@@ -145,11 +145,10 @@ body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
   width: 28px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  font-size: 0.85em;
   user-select: none;
   pointer-events: none;
-  font-family: var(--vscode-editor-font-family, monospace);
   opacity: 0.75;
+  /* font-family / font-size 不覆盖 — 跟正文一致 */
 }
 
 /* zebra default OFF (alpha 0). body.zebra-on triggers visible stripes (alpha 0.1) */
