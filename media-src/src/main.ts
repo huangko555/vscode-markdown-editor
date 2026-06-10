@@ -160,45 +160,18 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
 }
 
 // 多源行段落:per-line gutter
-// 用 <br> 边界精确找每个源行的起始 Y(vditor IR 一般用 <br> 分隔保留的源行)
+// 直接用 Range.getClientRects() 拿元素内的每个可视行矩形,逐行对应源行
 function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   const numLines = endLine - startLine + 1
 
-  // 收集每源行的起始 Y
+  const range = document.createRange()
+  range.selectNodeContents(el)
   const lineYs: number[] = []
-
-  // 第 1 行 = 元素第一段可视文字的 Y
-  const fullRange = document.createRange()
-  fullRange.selectNodeContents(el)
-  const allRects = fullRange.getClientRects()
-  for (let i = 0; i < allRects.length; i++) {
-    const r = allRects[i]
-    if (r.height > 0 && r.width > 0) { lineYs.push(r.top); break }
+  const rectList = range.getClientRects()
+  for (let i = 0; i < rectList.length; i++) {
+    const r = rectList[i]
+    if (r.height > 0 && r.width > 0) lineYs.push(r.top)
   }
-
-  // 第 2..N 行 = 每个 <br> 之后第一段可视文字的 Y
-  const brs = el.querySelectorAll('br')
-  brs.forEach((br) => {
-    let next: Node | null = br.nextSibling
-    while (next) {
-      if (next.nodeType === Node.TEXT_NODE && (next.textContent || '').trim()) break
-      if (next.nodeType === Node.ELEMENT_NODE) break
-      next = next.nextSibling
-    }
-    if (!next) return
-    let rect: DOMRect | null = null
-    try {
-      if (next.nodeType === Node.TEXT_NODE) {
-        const range = document.createRange()
-        range.setStart(next, 0)
-        range.setEnd(next, Math.min(1, (next.textContent || '').length))
-        rect = range.getBoundingClientRect() as DOMRect
-      } else {
-        rect = (next as Element).getBoundingClientRect() as DOMRect
-      }
-    } catch {}
-    if (rect && rect.height > 0) lineYs.push(rect.top)
-  })
 
   if (lineYs.length === 0) {
     el.setAttribute('data-line', `${startLine}-${endLine}`)
@@ -222,20 +195,12 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   const elFs = parseFloat(getComputedStyle(el).fontSize) || 14
   const yShift = Math.max(0, (elLh - elFs) / 2)
 
+  // 通用规则:每个源行对应 rects[i].top;rects 不够时停在最后一个
   let html = ''
-  if (lineYs.length === numLines) {
-    for (let i = 0; i < numLines; i++) {
-      html += `<div style="top:${(lineYs[i] - elRect.top) + yShift}px">${startLine + i}</div>`
-    }
-  } else if (lineYs.length === 1) {
-    for (let i = 0; i < numLines; i++) {
-      html += `<div style="top:${(lineYs[0] - elRect.top) + yShift}px">${startLine + i}</div>`
-    }
-  } else {
-    for (let i = 0; i < numLines; i++) {
-      const y = i < lineYs.length ? (lineYs[i] - elRect.top) : (lineYs[lineYs.length - 1] - elRect.top)
-      html += `<div style="top:${y + yShift}px">${startLine + i}</div>`
-    }
+  for (let i = 0; i < numLines; i++) {
+    const yIdx = Math.min(i, lineYs.length - 1)
+    const y = lineYs[yIdx] - elRect.top
+    html += `<div style="top:${y + yShift}px">${startLine + i}</div>`
   }
   gutter.innerHTML = html
   el.appendChild(gutter)
