@@ -72,7 +72,7 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-ir h1, .vditor-ir h2, .vditor-ir h3,
 .vditor-ir h4, .vditor-ir h5, .vditor-ir h6,
 .vditor-wysiwyg h1, .vditor-wysiwyg h2, .vditor-wysiwyg h3,
-.vditor-wysiwyg h4, .vditor-wysiwyg h5, .vditor-wysiwyg h6 { color: #58a6ff; }
+.vditor-wysiwyg h4, .vditor-wysiwyg h5, .vditor-wysiwyg h6 { color: #79b8ff; }
 .jconfirm {
   color: black;
 }
