@@ -23,9 +23,10 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor--dark .vditor-reset code:not(.hljs):not(.highlight-chroma) {
   background-color: rgba(66,133,244,.1);
 }
-/* fix outline toolbar padding */
+/* center toolbar horizontally within window */
 .vditor-toolbar.vditor-toolbar--pin {
-  padding-left: 10px!important;
+  justify-content: center!important;
+  padding-left: 0!important;
 }
 .vditor-ir pre.vditor-reset {
   position: relative;
