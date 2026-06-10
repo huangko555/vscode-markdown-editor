@@ -82,7 +82,7 @@ body[data-use-vscode-theme-color="1"] .vditor {
   background-color: transparent !important;
 }
 .vditor-reset table tbody tr:nth-child(2n) {
-  background-color: rgba(120, 160, 220, 0.11) !important;
+  background-color: rgba(120, 160, 220, 0.08) !important;
 }
 
 /* make outline panel resizable horizontally (default width 250px preserved) */
