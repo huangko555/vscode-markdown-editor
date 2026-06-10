@@ -19,6 +19,13 @@ import { toolbar } from './toolbar'
 import { fixTableIr } from './fix-table-ir'
 import './main.css'
 
+// restore zebra toggle state (default OFF)
+try {
+  if (localStorage.getItem('vditor-md.zebra') === '1') {
+    document.body.classList.add('zebra-on')
+  }
+} catch {}
+
 function initVditor(msg) {
   console.log('msg', msg)
   let inputTimer

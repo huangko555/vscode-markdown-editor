@@ -50,6 +50,14 @@ export const toolbar = [
 		tipPosition: 'e',
 		toolbar: [
 			'edit-mode',
+			{
+				name: 'toggle-zebra',
+				icon: t('toggleZebra'),
+				click() {
+					const on = document.body.classList.toggle('zebra-on')
+					try { localStorage.setItem('vditor-md.zebra', on ? '1' : '0') } catch {}
+				},
+			},
 			'both',
 			'code-theme',
 			'content-theme',
