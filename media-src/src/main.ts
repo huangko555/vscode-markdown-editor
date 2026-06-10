@@ -161,19 +161,50 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
   preview.appendChild(gutter)
 }
 
-// 多源行段落:per-line gutter
-// 直接用 Range.getClientRects() 拿元素内的每个可视行矩形,逐行对应源行
+// 多源行块:per-line gutter
+// 每个源行的 Y = 第一行可视文字 / <br> 后第一行 / 嵌套 block 元素第一行
 function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   const numLines = endLine - startLine + 1
 
-  const range = document.createRange()
-  range.selectNodeContents(el)
   const lineYs: number[] = []
-  const rectList = range.getClientRects()
-  for (let i = 0; i < rectList.length; i++) {
-    const r = rectList[i]
-    if (r.height > 0 && r.width > 0) lineYs.push(r.top)
+
+  // 第 1 行 Y
+  const fullRange = document.createRange()
+  fullRange.selectNodeContents(el)
+  const allRects = fullRange.getClientRects()
+  for (let i = 0; i < allRects.length; i++) {
+    const r = allRects[i]
+    if (r.height > 0 && r.width > 0) { lineYs.push(r.top); break }
   }
+
+  // <br> 之后的下一行 Y
+  el.querySelectorAll('br').forEach((br) => {
+    const rect = firstVisibleRectAfter(br)
+    if (rect) lineYs.push(rect.top)
+  })
+
+  // 嵌套 block 元素(p / div / blockquote 等),除了第 1 个之外都是新源行
+  const blockTags = ['P', 'DIV', 'BLOCKQUOTE', 'PRE']
+  const innerBlocks = Array.from(el.children).filter(c => blockTags.includes(c.tagName))
+  innerBlocks.forEach((blk, idx) => {
+    if (idx === 0) return  // 第 1 个 block 的 Y 已在 lineYs[0]
+    const range = document.createRange()
+    range.selectNodeContents(blk)
+    const rects = range.getClientRects()
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i]
+      if (r.height > 0 && r.width > 0) { lineYs.push(r.top); break }
+    }
+  })
+
+  // 排序 + dedup(2px 内视为同一行)
+  lineYs.sort((a, b) => a - b)
+  const dedup: number[] = []
+  for (const y of lineYs) {
+    if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
+  }
+  lineYs.length = 0
+  lineYs.push(...dedup)
 
   if (lineYs.length === 0) {
     el.setAttribute('data-line', `${startLine}-${endLine}`)
@@ -197,7 +228,7 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   const elFs = parseFloat(getComputedStyle(el).fontSize) || 14
   const yShift = Math.max(0, (elLh - elFs) / 2)
 
-  // 通用规则:每个源行对应 rects[i].top;rects 不够时停在最后一个
+  // 通用规则:每个源行对应 lineYs[i];lineYs 不够时停在最后一个
   let html = ''
   for (let i = 0; i < numLines; i++) {
     const yIdx = Math.min(i, lineYs.length - 1)
@@ -206,6 +237,41 @@ function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number) {
   }
   gutter.innerHTML = html
   el.appendChild(gutter)
+}
+
+// 找一个节点之后第一个有可视矩形的文字/元素
+function firstVisibleRectAfter(node: Node): DOMRect | null {
+  let current: Node | null = node
+  while (current) {
+    let next: Node | null = current.nextSibling
+    while (next) {
+      if (next.nodeType === Node.TEXT_NODE) {
+        const t = (next.textContent || '')
+        if (t.trim()) {
+          try {
+            const range = document.createRange()
+            range.setStart(next, 0)
+            range.setEnd(next, Math.min(1, t.length))
+            const r = range.getBoundingClientRect()
+            if (r.height > 0 && r.width > 0) return r as DOMRect
+          } catch {}
+        }
+      } else if (next.nodeType === Node.ELEMENT_NODE) {
+        try {
+          const range = document.createRange()
+          range.selectNodeContents(next)
+          const rects = range.getClientRects()
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i]
+            if (r.height > 0 && r.width > 0) return r as DOMRect
+          }
+        } catch {}
+      }
+      next = next.nextSibling
+    }
+    current = current.parentNode
+  }
+  return null
 }
 
 // 在 element 内,找第 charIndex 个字符(忽略 element 类型只看文本流)的 Range bounding rect
