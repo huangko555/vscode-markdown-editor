@@ -91,6 +91,45 @@ function attachLineNumbers() {
 
   // 代码块单独走 per-line gutter (块级区间号在 CSS 里隐藏)
   attachCodeBlockGutters()
+  // 表格走 per-row,每个 tr 的源行号挂在第一个 td/th 上
+  attachTableRowLines(lines, root)
+}
+
+function attachTableRowLines(lines: string[], root: HTMLElement) {
+  const topLevelChildren = Array.from(root.children) as HTMLElement[]
+  topLevelChildren.forEach((child) => {
+    if (!child.hasAttribute('data-line')) return
+    const range = child.getAttribute('data-line') || ''
+    const startLine = parseInt(range.split('-')[0])
+    if (isNaN(startLine)) return
+
+    const table = (child.tagName === 'TABLE' ? (child as any) : child.querySelector('table')) as HTMLTableElement | null
+    if (!table) return
+
+    // 清掉旧的 per-row data-line
+    table.querySelectorAll('th[data-line], td[data-line]').forEach((el) => el.removeAttribute('data-line'))
+
+    const allTrs = Array.from(table.querySelectorAll('tr'))
+    let sourceIdx = startLine - 1
+    let trIdx = 0
+
+    while (sourceIdx < lines.length && trIdx < allTrs.length) {
+      const srcLine = lines[sourceIdx]
+      if (!srcLine.startsWith('|')) break
+      // 分隔行 |---|---| 跳过 — DOM 里没对应 tr
+      if (/^\|[\s|:\-]+\|?\s*$/.test(srcLine)) {
+        sourceIdx++
+        continue
+      }
+      const firstCell = allTrs[trIdx].querySelector('td, th') as HTMLElement | null
+      if (firstCell) firstCell.setAttribute('data-line', String(sourceIdx + 1))
+      trIdx++
+      sourceIdx++
+    }
+
+    // 标记 wrapper:有 per-detail 行号了,CSS 隐藏块级区间号
+    child.setAttribute('data-line-detail', '1')
+  })
 }
 
 // 为每个 IR 渲染代码块,在它的 preview pre 里塞一个左侧 .hkq-code-gutter overlay,
