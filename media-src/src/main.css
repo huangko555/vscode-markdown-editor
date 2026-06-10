@@ -53,7 +53,7 @@ body[data-use-vscode-theme-color="1"] .vditor {
      不依赖 textCodeBlock-background 这种半透明 var,避免下层 editor bg 的 line-highlight / selection 等
      效果"漏"上来 */
   background-color: var(--vscode-editor-background);
-  background-image: linear-gradient(rgba(120, 160, 220, 0.1), rgba(120, 160, 220, 0.1));
+  background-image: linear-gradient(rgba(120, 160, 220, 0.08), rgba(120, 160, 220, 0.08));
 }
 .hkq-code-scroll pre,
 .hkq-code-scroll pre.hljs,
