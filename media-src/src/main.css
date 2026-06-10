@@ -36,13 +36,16 @@ body[data-use-vscode-theme-color="1"] .vditor {
   display: none !important;
 }
 
-/* 代码块纵向永远完整展开,不要 max-height 限高;横向超长行延伸出去由编辑器整体处理 */
+/* 代码块纵向永远完整展开;横向 wrap 长行,跟段落一致(buildCodeGutter 按源行起点定位,wrap 不影响行号对齐)
+   overflow-wrap: anywhere 让长 token(URL / 无空格标识符)也能在任意位置断,避免溢出 */
 .vditor-reset pre.hljs,
 .vditor-reset pre code,
 .vditor-reset pre code.hljs {
   max-height: none !important;
   height: auto !important;
   overflow: visible !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
 }
 /* 代码块 bg 用 ::before 伪元素铺在 node 底层,pointer-events:none 让 click 完全透过
    vditor 的 IR expand 逻辑不受任何 DOM 包装干扰 */
@@ -128,24 +131,25 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset table tr {
   background-color: transparent !important;
 }
-/* 行号:用 ::before 内联到每个元素,浏览器原生 line-box 机制保 baseline 严格对齐
-   JS 算每个元素的 --vmd-gutter-x(水平偏移),让所有 ::before 落到同一 X 列 */
+/* 行号:每个带 data-source-line 的元素 ::after 显示源行号
+   JS 算每个元素的 --vmd-gutter-x(水平偏移),让所有数字落到同一 X 列
+   data-source-line 由 markdown-it 解析源 md 拿 token.map 后注入 */
 body.lineno-on .vditor-ir > .vditor-reset,
 body.lineno-on .vditor-wysiwyg > .vditor-reset {
-  padding-left: 65px !important;
+  padding-left: 50px !important;
 }
-body.lineno-on [data-line] {
+body.lineno-on [data-source-line] {
   position: relative;
 }
-body.lineno-on [data-line]::after {
-  content: attr(data-line);
+body.lineno-on [data-source-line]::after {
+  content: attr(data-source-line);
   position: absolute;
-  left: var(--vmd-gutter-x, -65px);
+  left: var(--vmd-gutter-x, -50px);
   top: 0;
-  width: 55px;
+  width: 40px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  /* font-size/line-height 都跟父元素继承 — 浏览器 line-box 机制自动 baseline 对齐 */
+  /* font-size/line-height 跟父元素继承 — 浏览器 line-box 机制自动 baseline 对齐 */
   font-size: inherit;
   line-height: inherit;
   opacity: 0.9;
@@ -153,31 +157,36 @@ body.lineno-on [data-line]::after {
   pointer-events: none;
 }
 /* 标题数字上浮成 label 样,避免跟标题文字同 baseline 视觉重叠 */
-body.lineno-on h1[data-line]::after,
-body.lineno-on h2[data-line]::after,
-body.lineno-on h3[data-line]::after,
-body.lineno-on h4[data-line]::after,
-body.lineno-on h5[data-line]::after,
-body.lineno-on h6[data-line]::after {
+body.lineno-on h1[data-source-line]::after,
+body.lineno-on h2[data-source-line]::after,
+body.lineno-on h3[data-source-line]::after,
+body.lineno-on h4[data-source-line]::after,
+body.lineno-on h5[data-source-line]::after,
+body.lineno-on h6[data-source-line]::after {
   top: 0.1em;
   font-size: var(--vscode-editor-font-size, 14px);
   line-height: 1;
 }
 
-/* 代码块 + 多行段落 per-line gutter overlay
-   数字 div 各自带 style="top: <Y>px" (JS 用 Range 实测每行 Y),严格 1:1 对齐每行 */
+/* 代码块 / 多行段落 per-line gutter overlay:每行单独 div,JS 用 Range 实测每行 Y */
 body.lineno-on .vmd-code-gutter,
 body.lineno-on .vmd-block-gutter {
   position: absolute;
-  left: var(--vmd-gutter-x, -65px);
+  left: var(--vmd-gutter-x, -50px);
   top: 0;
-  width: 55px;
+  width: 40px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
+}
+/* 代码块用代码字号,段落 overlay font-size inherit 父段落(跟单行 ::after 行号一致)*/
+body.lineno-on .vmd-code-gutter {
   font-size: var(--vscode-editor-font-size, 14px);
+}
+body.lineno-on .vmd-block-gutter {
+  font-size: inherit;
 }
 body.lineno-on .vmd-code-gutter > div,
 body.lineno-on .vmd-block-gutter > div {
@@ -185,10 +194,15 @@ body.lineno-on .vmd-block-gutter > div {
   left: 0;
   width: 100%;
   text-align: right;
+  font-size: inherit;
   line-height: 1;
 }
 body:not(.lineno-on) .vmd-code-gutter,
 body:not(.lineno-on) .vmd-block-gutter {
+  display: none;
+}
+/* 多行段落:行号靠 overlay 渲染,隐藏元素自带的 ::after 避免与 overlay 第一行重复 */
+body.lineno-on [data-source-line-end]::after {
   display: none;
 }
 

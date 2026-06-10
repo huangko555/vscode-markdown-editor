@@ -17,6 +17,7 @@ import 'vditor/dist/index.css'
 import { t, lang } from './lang'
 import { toolbar } from './toolbar'
 import { fixTableIr } from './fix-table-ir'
+import { injectSourceLines } from './source-map'
 import './main.css'
 
 // restore zebra toggle state (default OFF)
@@ -35,8 +36,8 @@ try {
   document.body.classList.add('lineno-on')
 }
 
-// 行号 = 元素的 ::before 伪元素(content=attr(data-line)),浏览器原生 inline 机制保证 baseline 严格对齐
-// JS 只算每个元素的 --vmd-gutter-x(水平偏移),让所有 ::before 落到同一 X 列
+// 行号映射:用 markdown-it 解析源 md 拿 token.map 源行号,注入到 vditor DOM 的 data-source-line
+// 再算每个标了 data-source-line 的元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列
 function attachLineNumbers() {
   if (!(window as any).vditor) return
   const roots = document.querySelectorAll<HTMLElement>('.vditor-reset[contenteditable="true"]')
@@ -44,73 +45,34 @@ function attachLineNumbers() {
   roots.forEach((r) => { if (r.offsetParent !== null) root = r })
   if (!root) return
 
-  const md: string = (window as any).vditor.getValue()
-  const lines = md.split('\n')
+  // 清掉旧 gutter overlay(代码块/多行段落都是独立 div,需要每次重建)
+  root.querySelectorAll('.vmd-code-gutter, .vmd-block-gutter').forEach(el => el.remove())
 
-  // 清掉旧的 data-line 和各种 gutter overlay
-  root.querySelectorAll('[data-line]').forEach(el => el.removeAttribute('data-line'))
-  root.querySelectorAll('.vmd-code-gutter, .vmd-block-gutter, .vmd-line-gutter').forEach(el => el.remove())
+  const source: string = (window as any).vditor.getValue()
+  injectSourceLines(root, source)
 
-  const children = Array.from(root.children) as HTMLElement[]
-  let sourceIdx = 0
-  let domIdx = 0
+  // 代码块特殊:per-line gutter(每行单独 div,startLine+1 跳过 fence ``` 那行)
+  root.querySelectorAll<HTMLElement>('pre.vditor-ir__preview').forEach(preview => {
+    const node = preview.closest('[data-source-line]') as HTMLElement | null
+    if (!node) return
+    const startLine = parseInt(node.getAttribute('data-source-line') || '0')
+    if (!startLine) return
+    const code = preview.querySelector('code') as HTMLElement | null
+    if (code) buildCodeGutter(preview, code, startLine + 1)
+  })
 
-  while (sourceIdx < lines.length && domIdx < children.length) {
-    while (sourceIdx < lines.length && lines[sourceIdx].trim() === '') sourceIdx++
-    if (sourceIdx >= lines.length) break
+  // 多行段落:markdown-it 把连续非空行合成一个 paragraph token,只给 1 个 startLine
+  // 用 Range 实测每行可视 Y,overlay 每行单独显示行号(顶层段落 + blockquote 内段落都走这里)
+  root.querySelectorAll<HTMLElement>('[data-source-line-end]').forEach(p => {
+    const startLine = parseInt(p.getAttribute('data-source-line') || '0')
+    const endLine = parseInt(p.getAttribute('data-source-line-end') || '0')
+    if (endLine > startLine) buildParagraphGutter(p, startLine, endLine)
+  })
 
-    const child = children[domIdx]
-    const startLine = sourceIdx + 1
-    const firstLine = lines[sourceIdx]
-    const consumed = blockConsumed(firstLine, lines, sourceIdx)
-    const endLine = sourceIdx + consumed
-    const labelText = startLine === endLine ? String(startLine) : `${startLine}-${endLine}`
-
-    if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
-      // 代码块:只给 preview pre 建 gutter(编辑态不需要)
-      const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
-      if (preview) {
-        const code = preview.querySelector('code') as HTMLElement | null
-        if (code) buildCodeGutter(preview, code, startLine + 1)
-      }
-    } else if (firstLine.startsWith('|')) {
-      // 表格:per-tr data-line 放在第一个 td/th
-      const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table')
-      if (table) {
-        markTableRows(table, lines, sourceIdx)
-      } else {
-        child.setAttribute('data-line', labelText)
-      }
-    } else if (/^[*\-+] /.test(firstLine) || /^\d+\. /.test(firstLine)) {
-      // 列表:per-li 递归
-      let listEl: HTMLElement | null = null
-      if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
-      else listEl = child.querySelector('ul, ol')
-      if (listEl) markListItems(listEl, lines, sourceIdx)
-      else child.setAttribute('data-line', labelText)
-    } else {
-      // 标题、HR — 单源行用 data-line + ::after,挂在真正的 h1-h6 元素上(font-size 继承正确)
-      // 多源行段落/blockquote — 用 per-line gutter overlay
-      if (endLine === startLine) {
-        let target: Element = child
-        if (firstLine.startsWith('#')) {
-          target = child.querySelector('h1,h2,h3,h4,h5,h6') || child
-        }
-        target.setAttribute('data-line', String(startLine))
-      } else {
-        buildBlockGutter(child, startLine, endLine, lines)
-      }
-    }
-
-    sourceIdx += consumed
-    domIdx++
-  }
-
-  // 为所有 [data-line] 元素计算 --vmd-gutter-x,::after 都落到同一 X 列
-  // 注意:::after position absolute 是相对 padding-box 的(border 之内),
-  // 要减去元素的 border-left 宽度,否则 blockquote 等带 border-left 的元素会偏移
+  // 算每个 [data-source-line] 元素的 --vmd-gutter-x
+  // ::after 是 position:absolute,基准是 padding-box;blockquote 有 border-left,要扣掉
   const rootRect = root.getBoundingClientRect()
-  root.querySelectorAll<HTMLElement>('[data-line]').forEach(el => {
+  root.querySelectorAll<HTMLElement>('[data-source-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
     const borderLeft = parseFloat(getComputedStyle(el).borderLeftWidth) || 0
     el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
@@ -161,215 +123,89 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
   preview.appendChild(gutter)
 }
 
-// 多源行块:per-line gutter
-// 简单可靠的方案 — 取所有可视行矩形,源行 i 对应 rects[i].top
-// 长源行 wrap 时下一源行号会落到上一源行的 wrap 上,但至少不会重叠
-function buildBlockGutter(el: HTMLElement, startLine: number, endLine: number, _allLines: string[]) {
+// 多行段落 per-line gutter:用 textContent 里的 \n 字符定位每个源行起点,Range 单字符测 glyph rect
+// 关键:wrap 不影响 — 源行 N 的起点字符是 textContent 中第 N-1 个 \n 之后,该字符所在 visual line
+// 就是源行 N 的起始 visual line;wrap 产生的额外 visual line 不会被错占
+// 同时跳过 vditor-ir__marker(隐藏的 markdown 标记 # > ** 等)和空白,找到第一个有可视 rect 的字符
+function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: number) {
   const numLines = endLine - startLine + 1
 
-  const range = document.createRange()
-  range.selectNodeContents(el)
-  const rectsArr: DOMRect[] = []
-  const allRects = range.getClientRects()
-  for (let i = 0; i < allRects.length; i++) {
-    const r = allRects[i]
-    if (r.height > 0 && r.width > 0) rectsArr.push(r as DOMRect)
+  // 扁平收集所有 text node(包括 marker 内的,因为 \n 计数要算它们的字符)
+  const textNodes: Text[] = []
+  function collect(n: Node) {
+    if (n.nodeType === Node.TEXT_NODE) textNodes.push(n as Text)
+    else for (let i = 0; i < n.childNodes.length; i++) collect(n.childNodes[i])
+  }
+  collect(el)
+
+  // 计算每个 source line 起点的全局字符索引(textContent 里)
+  const fullText = textNodes.map(t => t.textContent || '').join('')
+  const lineStartIdx: number[] = [0]
+  for (let i = 0; i < fullText.length; i++) {
+    if (fullText[i] === '\n') lineStartIdx.push(i + 1)
   }
 
-  if (rectsArr.length === 0) {
-    el.setAttribute('data-line', `${startLine}-${endLine}`)
-    return
-  }
-
-  // 每个源行 i 取 rects[i].top;超出 rects 长度时落到最后一行
-  const lineYs: number[] = []
-  for (let i = 0; i < numLines; i++) {
-    const idx = Math.min(i, rectsArr.length - 1)
-    lineYs.push(rectsArr[idx].top)
-  }
-
-  const root = el.closest('.vditor-reset') as HTMLElement | null
-  if (!root) return
-  const rootRect = root.getBoundingClientRect()
-  const elRect = el.getBoundingClientRect()
-
-  el.style.position = 'relative'
-
-  const gutter = document.createElement('div')
-  gutter.className = 'vmd-block-gutter'
-  gutter.setAttribute('contenteditable', 'false')
-  gutter.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5) + 'px')
-
-  // baseline 微调:数字 line-height:1 时上浮几像素,补 yShift 让它对齐父行
-  const elLh = parseFloat(getComputedStyle(el).lineHeight) || 14
-  const elFs = parseFloat(getComputedStyle(el).fontSize) || 14
-  const yShift = Math.max(0, (elLh - elFs) / 2)
-
-  // 通用规则:每个源行对应 lineYs[i];lineYs 不够时停在最后一个
-  let html = ''
-  for (let i = 0; i < numLines; i++) {
-    const yIdx = Math.min(i, lineYs.length - 1)
-    const y = lineYs[yIdx] - elRect.top
-    html += `<div style="top:${y + yShift}px">${startLine + i}</div>`
-  }
-  gutter.innerHTML = html
-  el.appendChild(gutter)
-}
-
-// 用源行文字签名在元素 textContent 里搜索每行的 Y
-// vditor IR 模式 textContent 保留 markdown 标记(只是 CSS 隐藏),所以用字面值优先
-function findSourceLineYsByText(el: HTMLElement, sourceLines: string[]): number[] {
-  const ys: number[] = []
-  const fullText = el.textContent || ''
-  let lastPos = 0
-
-  const tryFind = (variant: string, from: number): number => {
-    const sig = variant.substring(0, 25)
-    if (sig.length < 2) return -1
-    return fullText.indexOf(sig, from)
-  }
-
-  // 从 pos 往后扫,直到找到一个真正可视(非 hidden marker)的字符,返回它的 Y
-  // vditor IR 把 ** > 等 markdown 标记藏在 width:0 height:0 的 span 里,
-  // 命中这些字符时 Range bounding rect height 是 0,要跳过它们找到下一个真实文字
-  const getYAt = (pos: number, sigLen: number): { y: number; endPos: number } | null => {
-    for (let off = 0; off < 40; off++) {
-      const node = findNodeAtTextPos(el, pos + off)
-      if (!node) continue
-      try {
-        const range = document.createRange()
-        range.setStart(node.node, node.offset)
-        range.setEnd(node.node, Math.min(node.offset + 1, (node.node.textContent || '').length))
-        const rect = range.getBoundingClientRect()
-        if (rect.height > 0 && rect.width > 0) return { y: rect.top, endPos: pos + sigLen }
-      } catch {}
+  // 从某个全局字符索引 fromIdx 起,找到第一个可视字符(非 marker、非空白、有 height)的 rect
+  function findRectFrom(fromIdx: number): { top: number; height: number } | null {
+    let count = 0
+    for (const tn of textNodes) {
+      const text = tn.textContent || ''
+      const len = text.length
+      if (count + len <= fromIdx) { count += len; continue }
+      const startOff = Math.max(0, fromIdx - count)
+      // 跳过 marker span 内的 text node
+      let p = tn.parentElement
+      let inMarker = false
+      while (p && p !== el) {
+        if (p.classList && p.classList.contains('vditor-ir__marker')) { inMarker = true; break }
+        p = p.parentElement
+      }
+      if (!inMarker) {
+        for (let off = startOff; off < len; off++) {
+          const ch = text[off]
+          if (ch === '\n' || ch === ' ' || ch === '\t') continue
+          const r = document.createRange()
+          try { r.setStart(tn, off); r.setEnd(tn, off + 1) } catch { continue }
+          const rect = r.getBoundingClientRect()
+          if (rect.height > 0 && rect.width > 0) return { top: rect.top, height: rect.height }
+        }
+      }
+      count += len
+      fromIdx = count // 这个 tn 找不到,从下一个 tn 起整体扫
     }
     return null
   }
 
-  for (let i = 0; i < sourceLines.length; i++) {
-    const raw = sourceLines[i].trim()
-    // 多种签名变体逐个尝试
-    const variants: string[] = [
-      raw,                                                                          // 字面值(IR 模式 textContent 保留 markdown 标记)
-      raw.replace(/^[>#\-*+]+\s*/, '').replace(/^\d+\.\s+/, ''),                    // 去前导标记
-      raw.replace(/\*\*|\*|__|_|`|~/g, ''),                                         // 去内联标记
-      raw.replace(/^[>#\-*+]+\s*/, '').replace(/^\d+\.\s+/, '').replace(/\*\*|\*|__|_|`|~/g, ''), // 全去
-    ]
-
-    let placed = false
-    for (const v of variants) {
-      const sig = v.substring(0, 25)
-      if (sig.length < 2) continue
-      const pos = fullText.indexOf(sig, lastPos)
-      if (pos < 0) continue
-      const res = getYAt(pos, sig.length)
-      if (res) {
-        ys.push(res.y)
-        lastPos = res.endPos
-        placed = true
-        break
-      }
-    }
-
-    if (!placed) {
-      // 全部 fallback 失败 — 用上一行 Y
-      ys.push(ys[i - 1] !== undefined ? ys[i - 1] : 0)
-    }
+  const lineRects: ({ top: number; height: number } | null)[] = []
+  for (let i = 0; i < numLines; i++) {
+    const charIdx = i < lineStartIdx.length ? lineStartIdx[i] : lineStartIdx[lineStartIdx.length - 1]
+    lineRects.push(findRectFrom(charIdx))
   }
-  return ys
-}
 
-// 找 textContent 拼接里第 targetPos 个字符所在的 (TextNode, offset)
-function findNodeAtTextPos(el: HTMLElement, targetPos: number): { node: Text; offset: number } | null {
-  let count = 0
-  let result: { node: Text; offset: number } | null = null
-  function walk(node: Node): boolean {
-    if (result) return true
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent || ''
-      if (count + text.length > targetPos) {
-        result = { node: node as Text, offset: targetPos - count }
-        return true
-      }
-      count += text.length
-    } else {
-      for (let i = 0; i < node.childNodes.length; i++) {
-        if (walk(node.childNodes[i])) return true
-      }
-    }
-    return false
-  }
-  walk(el)
-  return result
-}
+  const firstRect = lineRects.find(r => r !== null)
+  if (!firstRect) return
 
-// 结构化方式找源行 Y(<br>/嵌套块)— 作为 text-search 的 fallback
-function findSourceLineYsByStructure(el: HTMLElement): number[] {
-  const ys: number[] = []
-  const fullRange = document.createRange()
-  fullRange.selectNodeContents(el)
-  const allRects = fullRange.getClientRects()
-  for (let i = 0; i < allRects.length; i++) {
-    const r = allRects[i]
-    if (r.height > 0 && r.width > 0) { ys.push(r.top); break }
-  }
-  el.querySelectorAll('br').forEach(br => {
-    const rect = firstVisibleRectAfter(br)
-    if (rect) ys.push(rect.top)
-  })
-  const blockTags = ['P', 'DIV', 'BLOCKQUOTE', 'PRE']
-  Array.from(el.children).filter(c => blockTags.includes(c.tagName)).forEach((blk, idx) => {
-    if (idx === 0) return
-    const range = document.createRange()
-    range.selectNodeContents(blk)
-    const rects = range.getClientRects()
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i]
-      if (r.height > 0 && r.width > 0) { ys.push(r.top); break }
-    }
-  })
-  ys.sort((a, b) => a - b)
-  const dedup: number[] = []
-  for (const y of ys) {
-    if (dedup.length === 0 || y > dedup[dedup.length - 1] + 2) dedup.push(y)
-  }
-  return dedup
-}
+  const rootEl = el.closest('.vditor-reset') as HTMLElement | null
+  if (!rootEl) return
+  const rootRect = rootEl.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
 
-// 找一个节点之后第一个有可视矩形的文字/元素
-function firstVisibleRectAfter(node: Node): DOMRect | null {
-  let current: Node | null = node
-  while (current) {
-    let next: Node | null = current.nextSibling
-    while (next) {
-      if (next.nodeType === Node.TEXT_NODE) {
-        const t = (next.textContent || '')
-        if (t.trim()) {
-          try {
-            const range = document.createRange()
-            range.setStart(next, 0)
-            range.setEnd(next, Math.min(1, t.length))
-            const r = range.getBoundingClientRect()
-            if (r.height > 0 && r.width > 0) return r as DOMRect
-          } catch {}
-        }
-      } else if (next.nodeType === Node.ELEMENT_NODE) {
-        try {
-          const range = document.createRange()
-          range.selectNodeContents(next)
-          const rects = range.getClientRects()
-          for (let i = 0; i < rects.length; i++) {
-            const r = rects[i]
-            if (r.height > 0 && r.width > 0) return r as DOMRect
-          }
-        } catch {}
-      }
-      next = next.nextSibling
-    }
-    current = current.parentNode
+  el.style.position = 'relative'
+  const gutter = document.createElement('div')
+  gutter.className = 'vmd-block-gutter'
+  gutter.setAttribute('contenteditable', 'false')
+  const cs = getComputedStyle(el)
+  const borderLeft = parseFloat(cs.borderLeftWidth) || 0
+  gutter.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
+
+  let html = ''
+  for (let i = 0; i < numLines; i++) {
+    const lr = lineRects[i] || firstRect
+    const y = lr.top - elRect.top
+    html += `<div style="top:${y}px;font-size:${lr.height}px;line-height:1;height:${lr.height}px">${startLine + i}</div>`
   }
-  return null
+  gutter.innerHTML = html
+  el.appendChild(gutter)
 }
 
 // 在 element 内,找第 charIndex 个字符(忽略 element 类型只看文本流)的 Range bounding rect
@@ -404,61 +240,6 @@ function getCharRect(el: HTMLElement, charIndex: number): DOMRect | null {
   } catch {}
   return null
 }
-
-function markTableRows(table: HTMLElement, lines: string[], startIdx: number) {
-  const allTrs = Array.from(table.querySelectorAll('tr')) as HTMLElement[]
-  let si = startIdx, ti = 0
-  while (si < lines.length && ti < allTrs.length) {
-    const sl = lines[si]
-    if (!sl.startsWith('|')) break
-    if (/^\|[\s|:\-]+\|?\s*$/.test(sl)) { si++; continue }
-    const firstCell = allTrs[ti].querySelector('td, th') as HTMLElement | null
-    if (firstCell) firstCell.setAttribute('data-line', String(si + 1))
-    ti++; si++
-  }
-}
-
-function markListItems(listEl: HTMLElement, lines: string[], startIdx: number): number {
-  let si = startIdx
-  const items = Array.from(listEl.children).filter(c => c.tagName === 'LI') as HTMLElement[]
-  for (const li of items) {
-    while (si < lines.length) {
-      const t = lines[si].trimStart()
-      if (/^[*\-+] /.test(t) || /^\d+\. /.test(t)) break
-      si++
-    }
-    if (si >= lines.length) break
-    li.setAttribute('data-line', String(si + 1))
-    si++
-    const nested = Array.from(li.children).find(c => c.tagName === 'UL' || c.tagName === 'OL') as HTMLElement | undefined
-    if (nested) si = markListItems(nested, lines, si)
-  }
-  return si
-}
-
-function blockConsumed(line: string, lines: string[], startIdx: number): number {
-  let c = 1
-  if (line.startsWith('```') || line.startsWith('~~~')) {
-    const fence = line.substring(0, 3)
-    while (startIdx + c < lines.length && !lines[startIdx + c].startsWith(fence)) c++
-    c++
-  } else if (line.startsWith('|')) {
-    while (startIdx + c < lines.length && lines[startIdx + c].startsWith('|')) c++
-  } else if (line.startsWith('>')) {
-    while (startIdx + c < lines.length && lines[startIdx + c].startsWith('>')) c++
-  } else if (/^[*\-+] /.test(line) || /^\d+\. /.test(line)) {
-    while (startIdx + c < lines.length) {
-      const n = lines[startIdx + c]
-      if (n.trim() === '') break
-      if (/^[*\-+] /.test(n) || /^\d+\. /.test(n) || n.startsWith('  ') || n.startsWith('\t')) c++
-      else break
-    }
-  } else if (!line.startsWith('#') && !/^---+$/.test(line) && !/^___+$/.test(line) && !/^\*\*\*+$/.test(line)) {
-    while (startIdx + c < lines.length && lines[startIdx + c].trim() !== '') c++
-  }
-  return c
-}
-
 
 ;(window as any).__attachLineNumbers = attachLineNumbers
 
@@ -509,6 +290,20 @@ function initVditor(msg) {
       fixTableIr()
       fixPanelHover()
       attachLineNumbers()
+      // 窗口/容器尺寸变化时重算行号(wrap 行数/位置会变,绝对定位的 overlay 必须跟着重排)
+      // debounce 50ms 避免拖拽 resize 时高频重算
+      let resizeTimer: any = null
+      const scheduleReattach = () => {
+        if (resizeTimer) clearTimeout(resizeTimer)
+        resizeTimer = setTimeout(() => attachLineNumbers(), 50)
+      }
+      const editor = document.getElementById('app')
+      if (editor && typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(scheduleReattach)
+        ro.observe(editor)
+      } else {
+        window.addEventListener('resize', scheduleReattach)
+      }
     },
     input() {
       attachLineNumbers()
