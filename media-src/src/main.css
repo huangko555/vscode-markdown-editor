@@ -36,6 +36,16 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-ir__node--expand[data-type=code-block] .vditor-ir__preview {
   display: none !important;
 }
+
+/* 代码块纵向永远完整展开,不要 max-height 限高 + 内部纵向滚动条
+   横向 long line 由编辑器整体的横向滚动消化 (单元素不能 overflow-x auto + overflow-y visible,会被浏览器强制双 auto) */
+.vditor-reset pre.hljs,
+.vditor-reset pre code,
+.vditor-reset pre code.hljs {
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+}
 /* center toolbar horizontally within window
    vditor toolbar uses float layout (not flex), so convert children to inline-block + text-align center */
 .vditor-toolbar.vditor-toolbar--pin {
