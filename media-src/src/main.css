@@ -159,7 +159,7 @@ body.lineno-on h3[data-line]::after,
 body.lineno-on h4[data-line]::after,
 body.lineno-on h5[data-line]::after,
 body.lineno-on h6[data-line]::after {
-  top: -0.4em;
+  top: 0.1em;
   font-size: var(--vscode-editor-font-size, 14px);
   line-height: 1;
 }
