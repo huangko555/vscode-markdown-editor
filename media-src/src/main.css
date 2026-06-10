@@ -36,8 +36,7 @@ body[data-use-vscode-theme-color="1"] .vditor {
   display: none !important;
 }
 
-/* 代码块纵向永远完整展开,不要 max-height 限高
-   .hkq-code-scroll wrapper(JS 包的)负责横向滚动,pre 本身 overflow visible 不裁切 */
+/* 代码块纵向永远完整展开,不要 max-height 限高;横向超长行延伸出去由编辑器整体处理 */
 .vditor-reset pre.hljs,
 .vditor-reset pre code,
 .vditor-reset pre code.hljs {
@@ -129,104 +128,42 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset table tr {
   background-color: transparent !important;
 }
-/* source line numbers in left gutter (gated by body.lineno-on toggle, default ON)
-   每个顶层渲染块拿到 data-line=源 md 起始行号(由 JS 算)
-   用 ::after 不冲突,因为代码块 ::before 已用于铺 bg */
-.vditor-ir > .vditor-reset > [data-line],
-.vditor-wysiwyg > .vditor-reset > [data-line] {
-  position: relative;
-}
-/* 行号开启时,内容区左 padding 加大,给 gutter 留位置 */
+/* 全局行号 gutter — 一个绝对定位的 overlay 容器,所有行号子 div 都在同一 X 列对齐
+   JS 计算每个数字的 top = 对应 DOM 元素相对 root 的 Y 偏移 */
 body.lineno-on .vditor-ir > .vditor-reset,
 body.lineno-on .vditor-wysiwyg > .vditor-reset {
   padding-left: 65px !important;
 }
-/* code block per-line gutter overlay */
-.vditor-ir__node[data-type=code-block] pre.vditor-ir__preview {
-  position: relative;
-}
-body.lineno-on .hkq-code-gutter {
+.vmd-line-gutter {
   position: absolute;
-  left: -60px;
+  left: 0;
   top: 0;
-  width: 50px;
-  text-align: right;
-  color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  opacity: 0.9;
-  user-select: none;
+  width: 55px;
   pointer-events: none;
-  font-size: var(--vscode-editor-font-size, 14px);
-  white-space: normal;
-  padding: 0;
-  margin: 0;
-  font-family: inherit;
-  line-height: inherit;
+  user-select: none;
 }
-body.lineno-on .hkq-code-gutter > div {
-  line-height: inherit;
-}
-/* 代码块用了 per-line gutter,块级 ::after 区间号就藏掉避免重复 */
-body.lineno-on .vditor-ir__node[data-type=code-block][data-line]::after {
-  display: none;
-}
-/* 表格内 per-row 行号:每个 tr 的源行号挂在第一个 td/th 上,左侧 gutter 显示 */
-body.lineno-on table th[data-line],
-body.lineno-on table td[data-line] {
-  position: relative;
-}
-body.lineno-on table th[data-line]::before,
-body.lineno-on table td[data-line]::before {
-  content: attr(data-line);
+.vmd-line-gutter > div {
   position: absolute;
-  left: -60px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 52px;
+  left: 0;
+  width: 100%;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   opacity: 0.9;
   font-size: var(--vscode-editor-font-size, 14px);
-  user-select: none;
-  pointer-events: none;
   line-height: 1;
 }
-/* wrapper 已有 per-detail 行号,块级 ::after 区间号就藏 */
-body.lineno-on [data-line-detail][data-line]::after {
+body:not(.lineno-on) .vmd-line-gutter {
   display: none;
 }
-/* 列表 per-item 行号:每个 li 都标源行号(嵌套子列表递归) */
-body.lineno-on li[data-line] {
-  position: relative;
-}
-body.lineno-on li[data-line]::before {
-  content: attr(data-line);
-  position: absolute;
-  left: -55px;
-  top: 0;
-  width: 50px;
-  text-align: right;
-  color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  opacity: 0.9;
-  font-size: var(--vscode-editor-font-size, 14px);
-  user-select: none;
-  pointer-events: none;
-  line-height: inherit;
-}
-body.lineno-on .vditor-ir > .vditor-reset > [data-line]::after,
-body.lineno-on .vditor-wysiwyg > .vditor-reset > [data-line]::after {
-  content: attr(data-line);
-  position: absolute;
-  left: -60px;
-  bottom: 0;             /* 底对齐 */
-  width: 52px;           /* 装得下 "100-200" 这种区间 */
-  text-align: right;
-  color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  user-select: none;
-  pointer-events: none;
-  opacity: 0.9;
-  /* 锁定为编辑器基本字号,不被标题继承放大 */
-  font-size: var(--vscode-editor-font-size, 14px);
-  line-height: 1;
+
+/* 去掉 vditor 默认给 H1/H2 加的下划横线(GitHub markdown 风格,源 md 里没有这条线) */
+.vditor-reset h1,
+.vditor-reset h2,
+.vditor-ir h1,
+.vditor-ir h2,
+.vditor-wysiwyg h1,
+.vditor-wysiwyg h2 {
+  border-bottom: none !important;
 }
 
 /* zebra default OFF (alpha 0). body.zebra-on triggers visible stripes (alpha 0.1) */

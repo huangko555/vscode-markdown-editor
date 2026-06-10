@@ -35,19 +35,40 @@ try {
   document.body.classList.add('lineno-on')
 }
 
-// 给每个顶层渲染块标 data-line=源 md 起始行号(行号显示靠 CSS ::after)
-// 算法:把源 md 一行一行扫,识别 block 类型,顺着 DOM 顶层子节点对齐
+// 全局 gutter:单一容器 .vmd-line-gutter 放所有行号子 div,X 列一致对齐
+// 每个数字的 top = 对应 DOM 元素相对 root 的 Y 偏移
+// — 代码块/表格/列表精确到行
+// — 段落/blockquote 多行块在块内均匀分布(reflow 后逐行没法精确,但数字齐全)
 function attachLineNumbers() {
   if (!(window as any).vditor) return
   const roots = document.querySelectorAll<HTMLElement>('.vditor-reset[contenteditable="true"]')
   let root: HTMLElement | null = null
-  roots.forEach((r) => { if (r.offsetParent !== null) root = r })  // 选当前可见模式的 root
+  roots.forEach((r) => { if (r.offsetParent !== null) root = r })
   if (!root) return
 
   const md: string = (window as any).vditor.getValue()
   const lines = md.split('\n')
-  const children = Array.from(root.children) as HTMLElement[]
 
+  root.style.position = 'relative'
+
+  const old = root.querySelector(':scope > .vmd-line-gutter')
+  if (old) old.remove()
+
+  const gutter = document.createElement('div')
+  gutter.className = 'vmd-line-gutter'
+  gutter.setAttribute('contenteditable', 'false')
+  root.appendChild(gutter)
+
+  const rootRect = root.getBoundingClientRect()
+  const topOf = (el: HTMLElement) => el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
+  const place = (n: number, top: number) => {
+    const d = document.createElement('div')
+    d.textContent = String(n)
+    d.style.top = top + 'px'
+    gutter.appendChild(d)
+  }
+
+  const children = Array.from(root.children).filter(c => !c.classList.contains('vmd-line-gutter')) as HTMLElement[]
   let sourceIdx = 0
   let domIdx = 0
 
@@ -57,157 +78,144 @@ function attachLineNumbers() {
 
     const child = children[domIdx]
     const startLine = sourceIdx + 1
-
     const line = lines[sourceIdx]
-    let consumed = 1
-
-    if (line.startsWith('```') || line.startsWith('~~~')) {
-      const fence = line.substring(0, 3)
-      while (sourceIdx + consumed < lines.length && !lines[sourceIdx + consumed].startsWith(fence)) consumed++
-      consumed++
-    } else if (line.startsWith('|')) {
-      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].startsWith('|')) consumed++
-    } else if (line.startsWith('>')) {
-      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].startsWith('>')) consumed++
-    } else if (/^[*\-+] /.test(line) || /^\d+\. /.test(line)) {
-      while (sourceIdx + consumed < lines.length) {
-        const next = lines[sourceIdx + consumed]
-        if (next.trim() === '') break
-        if (/^[*\-+] /.test(next) || /^\d+\. /.test(next) || next.startsWith('  ') || next.startsWith('\t')) consumed++
-        else break
-      }
-    } else if (!line.startsWith('#') && !/^---+$/.test(line) && !/^___+$/.test(line) && !/^\*\*\*+$/.test(line)) {
-      while (sourceIdx + consumed < lines.length && lines[sourceIdx + consumed].trim() !== '') consumed++
-    }
-
+    const consumed = blockConsumed(line, lines, sourceIdx)
     const endLine = sourceIdx + consumed
-    child.setAttribute('data-line', startLine === endLine ? String(startLine) : `${startLine}-${endLine}`)
+
+    placeBlockNumbers(child, line, startLine, endLine, lines, sourceIdx, place, topOf)
 
     sourceIdx += consumed
     domIdx++
   }
-
-  for (let i = domIdx; i < children.length; i++) children[i].removeAttribute('data-line')
-
-  // 代码块单独走 per-line gutter (块级区间号在 CSS 里隐藏)
-  attachCodeBlockGutters()
-  // 表格走 per-row,每个 tr 的源行号挂在第一个 td/th 上
-  attachTableRowLines(lines, root)
-  // 列表走 per-item,递归处理嵌套
-  attachListItemLines(lines, root)
 }
 
-function attachListItemLines(lines: string[], root: HTMLElement) {
-  const topLevelChildren = Array.from(root.children) as HTMLElement[]
-  topLevelChildren.forEach((child) => {
-    if (!child.hasAttribute('data-line')) return
-    const range = child.getAttribute('data-line') || ''
-    const startLine = parseInt(range.split('-')[0])
-    if (isNaN(startLine)) return
+function blockConsumed(line: string, lines: string[], startIdx: number): number {
+  let c = 1
+  if (line.startsWith('```') || line.startsWith('~~~')) {
+    const fence = line.substring(0, 3)
+    while (startIdx + c < lines.length && !lines[startIdx + c].startsWith(fence)) c++
+    c++
+  } else if (line.startsWith('|')) {
+    while (startIdx + c < lines.length && lines[startIdx + c].startsWith('|')) c++
+  } else if (line.startsWith('>')) {
+    while (startIdx + c < lines.length && lines[startIdx + c].startsWith('>')) c++
+  } else if (/^[*\-+] /.test(line) || /^\d+\. /.test(line)) {
+    while (startIdx + c < lines.length) {
+      const n = lines[startIdx + c]
+      if (n.trim() === '') break
+      if (/^[*\-+] /.test(n) || /^\d+\. /.test(n) || n.startsWith('  ') || n.startsWith('\t')) c++
+      else break
+    }
+  } else if (!line.startsWith('#') && !/^---+$/.test(line) && !/^___+$/.test(line) && !/^\*\*\*+$/.test(line)) {
+    while (startIdx + c < lines.length && lines[startIdx + c].trim() !== '') c++
+  }
+  return c
+}
 
+function placeBlockNumbers(
+  child: HTMLElement,
+  firstLine: string,
+  startLine: number,
+  endLine: number,
+  lines: string[],
+  sourceIdx: number,
+  place: (n: number, top: number) => void,
+  topOf: (el: HTMLElement) => number,
+) {
+  // 代码块 — 每行精确
+  if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
+    const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
+    if (preview) {
+      const code = preview.querySelector('code') as HTMLElement | null
+      if (code) {
+        let codeLines = (code.textContent || '').split('\n')
+        if (codeLines.length > 0 && codeLines[codeLines.length - 1] === '') codeLines.pop()
+        const previewTop = topOf(preview)
+        const lh = parseFloat(getComputedStyle(code).lineHeight) || 20
+        for (let i = 0; i < codeLines.length; i++) place(startLine + 1 + i, previewTop + i * lh)
+        return
+      }
+    }
+    stackBlock(child, startLine, endLine, place, topOf)
+    return
+  }
+
+  // 表格 — 每个 tr 精确;分隔行 |---| 在 DOM 里无对应 tr,跳过
+  if (firstLine.startsWith('|')) {
+    const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table') as HTMLTableElement | null
+    if (table) {
+      const allTrs = Array.from(table.querySelectorAll('tr')) as HTMLElement[]
+      let si = sourceIdx, ti = 0
+      while (si < lines.length && ti < allTrs.length) {
+        const sl = lines[si]
+        if (!sl.startsWith('|')) break
+        if (/^\|[\s|:\-]+\|?\s*$/.test(sl)) { si++; continue }
+        place(si + 1, topOf(allTrs[ti]))
+        ti++; si++
+      }
+      return
+    }
+    stackBlock(child, startLine, endLine, place, topOf)
+    return
+  }
+
+  // 列表 — 递归
+  if (/^[*\-+] /.test(firstLine) || /^\d+\. /.test(firstLine)) {
     let listEl: HTMLElement | null = null
     if (child.tagName === 'UL' || child.tagName === 'OL') listEl = child
     else listEl = child.querySelector('ul, ol')
-    if (!listEl) return
-
-    listEl.querySelectorAll('li[data-line]').forEach((el) => el.removeAttribute('data-line'))
-    assignListLinesRecursive(listEl, lines, startLine - 1)
-    child.setAttribute('data-line-detail', '1')
-  })
-}
-
-function assignListLinesRecursive(listEl: HTMLElement, sourceLines: string[], startIdx: number): number {
-  let sourceIdx = startIdx
-  const items = Array.from(listEl.children).filter((el) => el.tagName === 'LI') as HTMLElement[]
-
-  for (const li of items) {
-    while (sourceIdx < sourceLines.length) {
-      const trimmed = sourceLines[sourceIdx].trimStart()
-      if (/^[*\-+] /.test(trimmed) || /^\d+\. /.test(trimmed)) break
-      sourceIdx++
-    }
-    if (sourceIdx >= sourceLines.length) break
-
-    li.setAttribute('data-line', String(sourceIdx + 1))
-    sourceIdx++
-
-    const nestedList = Array.from(li.children).find((el) => el.tagName === 'UL' || el.tagName === 'OL') as HTMLElement | undefined
-    if (nestedList) sourceIdx = assignListLinesRecursive(nestedList, sourceLines, sourceIdx)
+    if (listEl) { walkListItems(listEl, lines, sourceIdx, place, topOf); return }
+    stackBlock(child, startLine, endLine, place, topOf)
+    return
   }
-  return sourceIdx
+
+  // 标题、HR — 单行
+  if (firstLine.startsWith('#') || /^---+$/.test(firstLine) || /^___+$/.test(firstLine) || /^\*\*\*+$/.test(firstLine)) {
+    place(startLine, topOf(child))
+    return
+  }
+
+  // 段落、blockquote、其他 — 在块内均匀分布
+  stackBlock(child, startLine, endLine, place, topOf)
 }
 
-function attachTableRowLines(lines: string[], root: HTMLElement) {
-  const topLevelChildren = Array.from(root.children) as HTMLElement[]
-  topLevelChildren.forEach((child) => {
-    if (!child.hasAttribute('data-line')) return
-    const range = child.getAttribute('data-line') || ''
-    const startLine = parseInt(range.split('-')[0])
-    if (isNaN(startLine)) return
-
-    const table = (child.tagName === 'TABLE' ? (child as any) : child.querySelector('table')) as HTMLTableElement | null
-    if (!table) return
-
-    // 清掉旧的 per-row data-line
-    table.querySelectorAll('th[data-line], td[data-line]').forEach((el) => el.removeAttribute('data-line'))
-
-    const allTrs = Array.from(table.querySelectorAll('tr'))
-    let sourceIdx = startLine - 1
-    let trIdx = 0
-
-    while (sourceIdx < lines.length && trIdx < allTrs.length) {
-      const srcLine = lines[sourceIdx]
-      if (!srcLine.startsWith('|')) break
-      // 分隔行 |---|---| 跳过 — DOM 里没对应 tr
-      if (/^\|[\s|:\-]+\|?\s*$/.test(srcLine)) {
-        sourceIdx++
-        continue
-      }
-      const firstCell = allTrs[trIdx].querySelector('td, th') as HTMLElement | null
-      if (firstCell) firstCell.setAttribute('data-line', String(sourceIdx + 1))
-      trIdx++
-      sourceIdx++
-    }
-
-    // 标记 wrapper:有 per-detail 行号了,CSS 隐藏块级区间号
-    child.setAttribute('data-line-detail', '1')
-  })
+function stackBlock(
+  child: HTMLElement,
+  startLine: number,
+  endLine: number,
+  place: (n: number, top: number) => void,
+  topOf: (el: HTMLElement) => number,
+) {
+  const blockTop = topOf(child)
+  const blockHeight = child.offsetHeight
+  const numLines = endLine - startLine + 1
+  if (numLines === 1) { place(startLine, blockTop); return }
+  const lh = blockHeight / numLines
+  for (let n = startLine; n <= endLine; n++) place(n, blockTop + (n - startLine) * lh)
 }
 
-// 为每个 IR 渲染代码块,在它的 preview pre 里塞一个左侧 .hkq-code-gutter overlay,
-// 内含每一可视行对应的源 md 行号
-function attachCodeBlockGutters() {
-  const nodes = document.querySelectorAll<HTMLElement>('.vditor-ir__node[data-type=code-block][data-line]')
-  nodes.forEach((node) => {
-    const range = node.getAttribute('data-line') || ''
-    const startLine = parseInt(range.split('-')[0])
-    if (isNaN(startLine)) return
-
-    const preview = node.querySelector('pre.vditor-ir__preview') as HTMLElement | null
-    if (!preview) return
-    const code = preview.querySelector('code')
-    if (!code) return
-
-    let lines = (code.textContent || '').split('\n')
-    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-    if (lines.length === 0) return
-
-    // 先清掉旧 gutter
-    const old = preview.querySelector(':scope > .hkq-code-gutter')
-    if (old) old.remove()
-
-    const gutter = document.createElement('div')
-    gutter.className = 'hkq-code-gutter'
-    gutter.setAttribute('contenteditable', 'false')
-    let html = ''
-    // startLine 是 ``` 开头那行,内容第一行 = startLine + 1
-    for (let i = 0; i < lines.length; i++) {
-      html += `<div>${startLine + 1 + i}</div>`
+function walkListItems(
+  listEl: HTMLElement,
+  lines: string[],
+  startIdx: number,
+  place: (n: number, top: number) => void,
+  topOf: (el: HTMLElement) => number,
+): number {
+  let si = startIdx
+  const items = Array.from(listEl.children).filter(c => c.tagName === 'LI') as HTMLElement[]
+  for (const li of items) {
+    while (si < lines.length) {
+      const t = lines[si].trimStart()
+      if (/^[*\-+] /.test(t) || /^\d+\. /.test(t)) break
+      si++
     }
-    gutter.innerHTML = html
-
-    preview.appendChild(gutter)
-  })
+    if (si >= lines.length) break
+    place(si + 1, topOf(li))
+    si++
+    const nested = Array.from(li.children).find(c => c.tagName === 'UL' || c.tagName === 'OL') as HTMLElement | undefined
+    if (nested) si = walkListItems(nested, lines, si, place, topOf)
+  }
+  return si
 }
 
 ;(window as any).__attachLineNumbers = attachLineNumbers
