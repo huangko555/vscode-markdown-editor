@@ -67,13 +67,17 @@ function attachLineNumbers() {
     const labelText = startLine === endLine ? String(startLine) : `${startLine}-${endLine}`
 
     if (firstLine.startsWith('```') || firstLine.startsWith('~~~')) {
-      // 代码块:per-line gutter overlay
+      // 代码块:在 preview pre 和 marker--pre (编辑态显示源) 上都建 gutter
       const preview = child.querySelector('pre.vditor-ir__preview') as HTMLElement | null
+      const markerPre = child.querySelector('pre.vditor-ir__marker--pre') as HTMLElement | null
       if (preview) {
         const code = preview.querySelector('code') as HTMLElement | null
         if (code) buildCodeGutter(preview, code, startLine + 1)
       }
-      // 不在 child 上加 data-line(避免 ::before 重叠 gutter)
+      if (markerPre) {
+        const code = (markerPre.querySelector('code') as HTMLElement | null) || markerPre
+        buildCodeGutter(markerPre, code, startLine + 1)
+      }
     } else if (firstLine.startsWith('|')) {
       // 表格:per-tr data-line 放在第一个 td/th
       const table = child.tagName === 'TABLE' ? (child as HTMLTableElement) : child.querySelector('table')
