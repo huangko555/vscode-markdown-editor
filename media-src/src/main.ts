@@ -107,11 +107,13 @@ function attachLineNumbers() {
   }
 
   // 为所有 [data-line] 元素计算 --vmd-gutter-x,::after 都落到同一 X 列
-  // ::after font-size/line-height 继承父元素,baseline 由浏览器原生 line-box 机制保对齐
+  // 注意:::after position absolute 是相对 padding-box 的(border 之内),
+  // 要减去元素的 border-left 宽度,否则 blockquote 等带 border-left 的元素会偏移
   const rootRect = root.getBoundingClientRect()
   root.querySelectorAll<HTMLElement>('[data-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
-    el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5) + 'px')
+    const borderLeft = parseFloat(getComputedStyle(el).borderLeftWidth) || 0
+    el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
   })
 }
 
