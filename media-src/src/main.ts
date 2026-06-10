@@ -60,21 +60,18 @@ function attachLineNumbers() {
   root.appendChild(gutter)
 
   const rootRect = root.getBoundingClientRect()
-  // 用 Range 拿元素第一个非空文字节点的首字符 Y,对齐"实际可见文字"的位置
-  // 比直接用 element border-top 准确(后者算的是 box 上沿,会偏到 margin/padding 之上的空白里)
+  // 用 Range.selectNodeContents() + getClientRects() 拿元素的"每一行可视文字"的矩形
+  // 浏览器原生测量,自动处理 marker/隐藏 span/嵌套段落等;返回第一个非空的行矩形 top
   const topOf = (el: HTMLElement) => {
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    let node = walker.nextNode()
-    while (node && !(node.textContent && node.textContent.trim())) node = walker.nextNode()
-    if (node && node.textContent) {
-      try {
-        const range = document.createRange()
-        range.setStart(node, 0)
-        range.setEnd(node, 1)
-        const r = range.getBoundingClientRect()
-        if (r.height > 0) return r.top - rootRect.top + root!.scrollTop
-      } catch {}
-    }
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const rects = range.getClientRects()
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i]
+        if (r.height > 0 && r.width > 0) return r.top - rootRect.top + root!.scrollTop
+      }
+    } catch {}
     return el.getBoundingClientRect().top - rootRect.top + root!.scrollTop
   }
   const place = (n: number, top: number) => {

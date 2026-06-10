@@ -150,7 +150,8 @@ body.lineno-on .vditor-wysiwyg > .vditor-reset {
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
   opacity: 0.9;
   font-size: var(--vscode-editor-font-size, 14px);
-  line-height: 1;
+  /* line-height 跟正文一致 — baseline 跟目标文字对齐 */
+  line-height: inherit;
 }
 body:not(.lineno-on) .vmd-line-gutter {
   display: none;
