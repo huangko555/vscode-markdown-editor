@@ -160,32 +160,35 @@ body.lineno-on [data-source-line]::after {
   content: attr(data-source-line);
   position: absolute;
   left: var(--vmd-gutter-x, -50px);
-  top: 0;
+  /* 垂直锚到第一行视觉中心(JS 算 padTop + lineHeight/2 写入 --vmd-gutter-y);
+     拿不到 lineHeight 时退回 46% — 接近中线、略上偏,矫正数字底部留白错觉 */
+  top: var(--vmd-gutter-y, 46%);
+  transform: translateY(-50%);
   width: 40px;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, #6e7681);
-  /* font-size/line-height 跟父元素继承 — 浏览器 line-box 机制自动 baseline 对齐 */
-  font-size: inherit;
-  line-height: inherit;
+  /* 行号统一用代码字号,跟代码块里文字一致;不再 inherit 父元素字号 */
+  font-size: var(--vscode-editor-font-size, 14px);
+  font-weight: normal;
+  line-height: 1;
   opacity: 0.9;
   user-select: none;
   pointer-events: none;
 }
-/* 标题数字上浮成 label 样,避免跟标题文字同 baseline 视觉重叠 */
+/* 标题行号:走通用 --vmd-gutter-y 第一行中心规则,显示在标题顶部那一行;
+   再下移 0.5em(约 7px)矫正大字号标题视觉重心偏高的错觉 */
 body.lineno-on h1[data-source-line]::after,
 body.lineno-on h2[data-source-line]::after,
 body.lineno-on h3[data-source-line]::after,
 body.lineno-on h4[data-source-line]::after,
 body.lineno-on h5[data-source-line]::after,
 body.lineno-on h6[data-source-line]::after {
-  top: auto;
-  bottom: 0.15em;
-  font-size: var(--vscode-editor-font-size, 14px);
-  line-height: 1;
+  top: calc(var(--vmd-gutter-y, 46%) + 0.5em);
 }
-/* H1/H2 字号大,bottom 0.15em 看起来仍然偏低,单独往上推一些 */
-body.lineno-on h1[data-source-line]::after { bottom: 1em; }
-body.lineno-on h2[data-source-line]::after { bottom: 0.8em; }
+/* 表格行号:tr 拿不到有效 lineHeight,退回 46% 后视觉偏上;再下移几像素 */
+body.lineno-on tr[data-source-line]::after {
+  top: calc(var(--vmd-gutter-y, 46%) + 7px);
+}
 
 /* 代码块 / 多行段落 per-line gutter overlay:每行单独 div,JS 用 Range 实测每行 Y */
 body.lineno-on .vmd-code-gutter,
@@ -200,12 +203,11 @@ body.lineno-on .vmd-block-gutter {
   user-select: none;
   pointer-events: none;
 }
-/* 代码块用代码字号,段落 overlay font-size inherit 父段落(跟单行 ::after 行号一致)*/
-body.lineno-on .vmd-code-gutter {
-  font-size: var(--vscode-editor-font-size, 14px);
-}
+/* 代码块/段落 overlay 都统一用代码字号、不加粗 */
+body.lineno-on .vmd-code-gutter,
 body.lineno-on .vmd-block-gutter {
-  font-size: inherit;
+  font-size: var(--vscode-editor-font-size, 14px);
+  font-weight: normal;
 }
 body.lineno-on .vmd-code-gutter > div,
 body.lineno-on .vmd-block-gutter > div {
@@ -222,6 +224,12 @@ body:not(.lineno-on) .vmd-block-gutter {
 }
 /* 多行段落:行号靠 overlay 渲染,隐藏元素自带的 ::after 避免与 overlay 第一行重复 */
 body.lineno-on [data-source-line-end]::after {
+  display: none;
+}
+/* 嵌套结构里(ul>li、ol>li、blockquote>p、table>tr、li>p[data-source-line-end] 等),
+   只让最深层的 [data-source-line] 画 ::after,祖先的 ::after 与子元素或 overlay 在同一 Y 会叠两个数字
+   .vmd-code-gutter:代码块用 overlay 标 content 行号,外层包裹元素的 ::after(fence 行号) 也要藏掉 */
+body.lineno-on [data-source-line]:has([data-source-line], .vmd-code-gutter)::after {
   display: none;
 }
 

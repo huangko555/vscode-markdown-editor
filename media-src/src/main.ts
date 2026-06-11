@@ -70,13 +70,23 @@ function attachLineNumbers() {
     if (endLine > startLine) buildParagraphGutter(p, startLine, endLine)
   })
 
-  // 算每个 [data-source-line] 元素的 --vmd-gutter-x
-  // ::after 是 position:absolute,基准是 padding-box;blockquote 有 border-left,要扣掉
+  // 算每个 [data-source-line] 元素的 --vmd-gutter-x / --vmd-gutter-y
+  // x:::after 是 position:absolute,基准是 padding-box;blockquote 有 border-left,要扣掉
+  // y:对齐到第一行视觉中心(padTop + lineHeight/2),wrap 时不再用元素整体中点(会落到行间空白)
   const rootRect = root.getBoundingClientRect()
   root.querySelectorAll<HTMLElement>('[data-source-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
-    const borderLeft = parseFloat(getComputedStyle(el).borderLeftWidth) || 0
+    const cs = getComputedStyle(el)
+    const borderLeft = parseFloat(cs.borderLeftWidth) || 0
     el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
+    const elLh = parseFloat(cs.lineHeight)
+    if (elLh && elLh > 0) {
+      const padTop = parseFloat(cs.paddingTop) || 0
+      // 0.45 比正中(0.5)略上偏,矫正数字行槽视觉重心偏低的错觉
+      el.style.setProperty('--vmd-gutter-y', (padTop + elLh * 0.45) + 'px')
+    } else {
+      el.style.removeProperty('--vmd-gutter-y')
+    }
   })
 }
 
@@ -110,10 +120,10 @@ function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLi
   gutter.style.setProperty('--vmd-gutter-x', offset + 'px')
 
   // baseline 微调:Range.getBoundingClientRect 返回 glyph top,数字 line-height:1 时
-  // 视觉 baseline 比代码 baseline 略高几像素,补一个经验 shift 让数字落下来
+  // 视觉 baseline 比代码 baseline 略高几像素,补一个经验 shift 让数字落下来;0.3 比正中(0.5)略上偏
   const codeLh = parseFloat(getComputedStyle(code).lineHeight) || 14
   const codeFs = parseFloat(getComputedStyle(code).fontSize) || 14
-  const yShift = Math.max(0, (codeLh - codeFs) / 2)
+  const yShift = Math.max(0, (codeLh - codeFs) * 0.1)
 
   let html = ''
   for (let i = 0; i < lineYs.length; i++) {
@@ -199,11 +209,17 @@ function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: numbe
   const borderLeft = parseFloat(cs.borderLeftWidth) || 0
   gutter.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
 
+  // 行号字号统一用 CSS 里的代码字号(.vmd-block-gutter 上设的 var(--vscode-editor-font-size))
+  // 不再用 lr.height 当 font-size — 那样行号大小会跟父段落行高走、跟其它行号不一致
+  // gutter 还没 appendChild,getComputedStyle 拿不到 class 样式,直接读 root 上的 CSS 变量
+  const codeFs = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vscode-editor-font-size')) || 14
+  // 用父元素 line-height 做垂直居中(glyph rect 偏小、补出来的偏移不够);拿不到就退回到 glyph 高度
+  const elLh = parseFloat(cs.lineHeight) || firstRect.height
   let html = ''
   for (let i = 0; i < numLines; i++) {
     const lr = lineRects[i] || firstRect
-    const y = lr.top - elRect.top
-    html += `<div style="top:${y}px;font-size:${lr.height}px;line-height:1;height:${lr.height}px">${startLine + i}</div>`
+    const y = lr.top - elRect.top + Math.max(0, (elLh - codeFs) * 0.05)
+    html += `<div style="top:${y}px">${startLine + i}</div>`
   }
   gutter.innerHTML = html
   el.appendChild(gutter)
@@ -260,7 +276,16 @@ function bindLineMo() {
   const root = getVisibleEditorRoot()
   if (!root) return
   if (!lineMo) lineMo = new MutationObserver(scheduleAttach)
-  lineMo.observe(root, { childList: true, subtree: true, characterData: true })
+  // 加 attributes:vditor 退出代码块编辑时只切 class/style(preview ↔ edit),
+  // 不监听属性变化的话 overlay 不会被重 attach。
+  // 只盯 class/style 收敛事件量,attach 期间已 disconnect 不会形成回路
+  lineMo.observe(root, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  })
 }
 function detachLineMo() {
   lineMo?.disconnect()
