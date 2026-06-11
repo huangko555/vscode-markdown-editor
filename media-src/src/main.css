@@ -27,6 +27,15 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor .vditor-reset {
   font-family: var(--vscode-editor-font-family)!important;
 }
+/* 代码块/inline code:vditor 或 hljs 会给 pre/code 及内部高亮 span 加内联 monospace 字体,
+   用 * 强制所有后代都走 VS Code 编辑器配置的字体(editor.fontFamily),
+   保证 CJK 等宽字体(如更纱黑体)生效、ASCII 框图字符跟中文严格 2:1 对齐 */
+.vditor-reset pre,
+.vditor-reset pre *,
+.vditor-reset code,
+.vditor-reset code * {
+  font-family: var(--vscode-editor-font-family) !important;
+}
 /* inline code 底色(下面代码块 ::before 用同色叠加,保证两者一致) */
 .vditor--dark .vditor-reset code:not(.hljs):not(.highlight-chroma) {
   background-color: rgba(66, 133, 244, 0.1);
