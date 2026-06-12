@@ -4,7 +4,7 @@
   "private": "true",
   "scripts": {
     "start": "esbuild ./src/main.ts --bundle --watch --sourcemap --outfile=../media/dist/main.js",
-    "build": "node -e \"['main.js','main.js.map','main.css'].forEach(f=>require('fs').rmSync('../media/dist/'+f,{force:true}))\" && esbuild ./src/main.ts --bundle --minify --sourcemap --outfile=../media/dist/main.js"
+    "build": "node -e \"['main.js','main.js.map','main.css','parse-worker.js'].forEach(f=>require('fs').rmSync('../media/dist/'+f,{force:true}))\" && esbuild ./src/main.ts --bundle --minify --sourcemap --outfile=../media/dist/main.js && esbuild ./src/parse-worker.ts --bundle --minify --outfile=../media/dist/parse-worker-logic.js && node -e \"var fs=require('fs');fs.writeFileSync('../media/dist/parse-worker.js',fs.readFileSync('../media/dist/lute.min.js')+'\\n;\\n'+fs.readFileSync('../media/dist/parse-worker-logic.js'));fs.rmSync('../media/dist/parse-worker-logic.js',{force:true})\""
   },
   "browserslist": "> 0%",
   "devDependencies": {

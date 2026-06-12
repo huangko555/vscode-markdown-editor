@@ -4,6 +4,20 @@ body {
   margin: 0;
   padding: 0;
 }
+/* 代码块 #hex 颜色值前的色块预览(JS 在只读渲染层插入,像 VS Code 原生)
+   固定 11px(不用 em,避免不同 token 字号继承导致大小不一)+ 纯白 1px 外框 */
+.vmd-color-swatch {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-left: 4px;
+  margin-right: 5px;
+  vertical-align: -0.02em;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  pointer-events: none;
+  box-sizing: border-box;
+}
 /* vditor tooltip 修复:原版 :after 文字框没 display 控制,靠 JS 加 aria-label 控制显隐 —
    click 后 JS 没及时清 aria-label / 焦点没移走,tooltip 就一直挂在那。强制严格只在 :hover 时显示 */
 .vditor-tooltipped:after {
@@ -216,6 +230,15 @@ body:not(.lineno-on) [data-source-line].vmd-cursor-on::after {
   user-select: none;
   pointer-events: none;
 }
+/* cursor 模式 + 多行(硬换行)段落:整段是一个 [data-source-line] 元素,默认只显示段落起始行号在顶部。
+   改为显示光标所在那一行的源行号(JS 算 data-cursor-line)+ 定位到光标行 Y(--vmd-cursor-y)。
+   特异性比上面通用规则高(多了 [data-source-line-end]),覆盖 content / top / transform。 */
+body:not(.lineno-on) [data-source-line-end].vmd-cursor-on::after {
+  content: attr(data-cursor-line);
+  /* --vmd-cursor-y 已是光标行几何中心,translateY(-50%) 让行号居中,与 lineno-on overlay 一致 */
+  top: var(--vmd-cursor-y, 0);
+  transform: translateY(-50%);
+}
 /* 标题行号:走通用 --vmd-gutter-y 第一行中心规则,显示在标题顶部那一行;
    再下移 0.5em(约 7px)矫正大字号标题视觉重心偏高的错觉 */
 body.lineno-on h1[data-source-line]::after,
@@ -267,6 +290,11 @@ body.lineno-on .vmd-block-gutter > div {
   text-align: right;
   font-size: inherit;
   line-height: 1;
+}
+/* 段落 overlay:JS 把 top 设到行几何中心,这里居中对齐(与 cursor 模式同一套)。
+   代码块 gutter 不加(它走 buildCodeGutter 的 glyph-top + yShift 定位,保持原样) */
+body.lineno-on .vmd-block-gutter > div {
+  transform: translateY(-50%);
 }
 body:not(.lineno-on) .vmd-code-gutter,
 body:not(.lineno-on) .vmd-block-gutter {

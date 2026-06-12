@@ -38,38 +38,64 @@ try {
   }
 } catch {}
 
+// restore color swatch toggle state (default ON;only explicit '0' keeps off)
+try {
+  if (localStorage.getItem('vditor-md.swatch') !== '0') {
+    document.body.classList.add('swatch-on')
+  }
+} catch {
+  document.body.classList.add('swatch-on')
+}
+
+
 // 行号映射:用 vditor 内置 Lute parser 解析源 md(跟 IR DOM 同 parser,AST 1:1 对应 DOM),
 // 把源行号注入到 data-source-line。再算每个元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列。
 // 注入逻辑全在 source-map.ts 里
 function attachLineNumbers() {
   if (!(window as any).vditor) return
-  if (!document.body.classList.contains('lineno-on')) return
+  // 注:cursor 模式(lineno-off)也需要 data-source-line 注入才能显示光标所在行号,所以这里不再 early return on lineno-off。
+  // gutter overlay(per-line)只在 lineno-on 全开模式下才建,见下方 linenoOn 判断。
   const root = getVisibleEditorRoot()
   if (!root) return
+  const linenoOn = document.body.classList.contains('lineno-on')
 
-  // 清掉旧 gutter overlay(代码块/多行段落都是独立 div,需要每次重建)
+  // 清掉旧 gutter overlay(代码块/多行段落都是独立 div,需要每次重建;cursor 模式下不应残留)
   root.querySelectorAll('.vmd-code-gutter, .vmd-block-gutter').forEach(el => el.remove())
 
-  const source: string = (window as any).vditor.getValue()
-  injectSourceLines(root, source)
+  // injectSourceLines 内部用 __vscodeBuffer 作权威源,第二参被忽略——绝不要传 vditor.getValue()
+  // (大文档上它会序列化整个 DOM,每次 attach 调一次是几十~上百 ms 的纯浪费)
+  injectSourceLines(root, '')
 
-  // 代码块特殊:per-line gutter(每行单独 div,startLine+1 跳过 fence ``` 那行)
-  root.querySelectorAll<HTMLElement>('pre.vditor-ir__preview').forEach(preview => {
-    const node = preview.closest('[data-source-line]') as HTMLElement | null
-    if (!node) return
-    const startLine = parseInt(node.getAttribute('data-source-line') || '0')
-    if (!startLine) return
-    const code = preview.querySelector('code') as HTMLElement | null
-    if (code) buildCodeGutter(preview, code, startLine + 1)
-  })
+  // 视口剪裁参数(frustum culling):大文档每个元素都算 gutter 位置是大头开销,
+  // 只处理当前视口(上下扩展 buffer)内的元素;视口外行号本来就看不见,滚动时 scroll 触发补算
+  const vpBuffer = 1200
+  const vpTop = -vpBuffer
+  const vpBottom = (window.innerHeight || document.documentElement.clientHeight) + vpBuffer
+  const inViewport = (el: Element) => {
+    const r = el.getBoundingClientRect()
+    return r.bottom >= vpTop && r.top <= vpBottom
+  }
 
-  // 多行段落:Lute 把连续非空行合成一个 paragraph 节点,只给 1 个 startLine。
-  // 用 Range 实测每行可视 Y,overlay 每行单独显示行号(顶层段落 + blockquote 内段落都走这里)
-  root.querySelectorAll<HTMLElement>('[data-source-line-end]').forEach(p => {
-    const startLine = parseInt(p.getAttribute('data-source-line') || '0')
-    const endLine = parseInt(p.getAttribute('data-source-line-end') || '0')
-    if (endLine > startLine) buildParagraphGutter(p, startLine, endLine)
-  })
+  if (linenoOn) {
+    // 代码块 per-line gutter:Range 实测每源行 Y,贵。只对视口内代码块建
+    root.querySelectorAll<HTMLElement>('pre.vditor-ir__preview').forEach(preview => {
+      const node = preview.closest('[data-source-line]') as HTMLElement | null
+      if (!node) return
+      if (!inViewport(node)) return  // 视口外跳过
+      const startLine = parseInt(node.getAttribute('data-source-line') || '0')
+      if (!startLine) return
+      const code = preview.querySelector('code') as HTMLElement | null
+      if (code) buildCodeGutter(preview, code, startLine + 1)
+    })
+
+    // 多行段落 per-line gutter:Range 实测每行 wrap Y,更贵。只对视口内段落建
+    root.querySelectorAll<HTMLElement>('[data-source-line-end]').forEach(p => {
+      if (!inViewport(p)) return  // 视口外跳过
+      const startLine = parseInt(p.getAttribute('data-source-line') || '0')
+      const endLine = parseInt(p.getAttribute('data-source-line-end') || '0')
+      if (endLine > startLine) buildParagraphGutter(p, startLine, endLine)
+    })
+  }
 
   // 算每个 [data-source-line] 元素的 --vmd-gutter-x / --vmd-gutter-y
   // x:::after 是 position:absolute,基准是 padding-box;blockquote 有 border-left,要扣掉
@@ -113,6 +139,8 @@ function attachLineNumbers() {
   }
   root.querySelectorAll<HTMLElement>('[data-source-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
+    // 视口外(含 buffer)完全跳过:行号看不见,gutter-x/y 都不算,省掉 getComputedStyle + Range 的大头开销
+    if (elRect.bottom < vpTop || elRect.top > vpBottom) return
     const cs = getComputedStyle(el)
     const borderLeft = parseFloat(cs.borderLeftWidth) || 0
     el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
@@ -129,17 +157,97 @@ function attachLineNumbers() {
     }
   })
 
+  // #hex 颜色值前插色块预览(像 VS Code 原生)
+  attachColorSwatches(root)
+
   // 顺便刷新 cursor 标记(初次加载、edit 后 DOM 变化时 cursor 所在元素可能改了)
   try {
     const fn = (window as any).__updateCursorMarker
     if (typeof fn === 'function') fn()
   } catch {}
 
-  // 自动 dump 诊断数据给扩展端,扩展端会写到磁盘文件供 Claude 读
-  try {
-    const fn = (window as any).__debugSourceMapDump
-    if (typeof fn === 'function') fn()
-  } catch {}
+  // 自动 dump 诊断数据给扩展端的功能默认关掉:大文档下 JSON.stringify(几百 KB) + postMessage 显著拖慢 attach
+  // 需要诊断时在 webview console 手动调 window.__debugSourceMapDump()
+}
+
+function swatchInViewport(el: Element): boolean {
+  const vpBuf = 1200
+  const r = el.getBoundingClientRect()
+  return r.bottom >= -vpBuf && r.top <= (window.innerHeight || document.documentElement.clientHeight) + vpBuf
+}
+
+// #hex 颜色值前插色块预览(像 VS Code 原生)。全量扫描:覆盖代码块 / inline code / 正文。
+// 色块是 contenteditable=false 的空 span(无文本),理论上不进 vditor.getValue() → 不污染源码。
+// 跳过:隐藏 marker、代码块可编辑源(只处理 preview)、光标所在块(编辑中,避免干扰光标)、视口外块。
+const SWATCH_COLOR_RE = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/g
+function attachColorSwatches(root: HTMLElement) {
+  // 清除所有旧色块(无论开关状态都先清干净)
+  root.querySelectorAll('.vmd-color-swatch').forEach(s => s.remove())
+  // 开关关闭(more 菜单"颜色色块")→ 只清不建
+  if (!document.body.classList.contains('swatch-on')) return
+  // 光标所在顶层块(编辑中 → 跳过)
+  const sel = window.getSelection()
+  const anchor = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+  let cursorBlock: Element | null = null
+  if (anchor) {
+    let e: Element | null = (anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentNode) as Element | null
+    while (e && e !== root) {
+      const he = e as HTMLElement
+      if (he.hasAttribute && (he.hasAttribute('data-source-line') || e.classList.contains('vditor-ir__node'))) { cursorBlock = e; break }
+      e = e.parentElement
+    }
+  }
+  // 收集文本节点并拼成连续文本 + 记录每段在拼接文本里的起点。
+  // 关键:hljs 会把无引号的 #1a1020 拆成 "#" 和 "1a1020" 两个 token(不同文本节点),
+  // 按单节点匹配会漏。改成拼接全部文本节点再匹配,颜色跨节点也能找到;色块插在 "#" 所在节点。
+  const vpCache = new Map<Element, boolean>()
+  const blockInVp = (b: Element) => {
+    if (vpCache.has(b)) return vpCache.get(b) as boolean
+    const v = swatchInViewport(b); vpCache.set(b, v); return v
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const nodes: { node: Text; start: number; len: number }[] = []
+  let full = ''
+  let n: Node | null
+  while ((n = walker.nextNode())) {
+    const t = n as Text
+    const txt = t.textContent || ''
+    if (!txt) continue
+    const parent = t.parentElement
+    if (!parent) continue
+    if (parent.closest('.vditor-ir__marker')) continue          // 隐藏标记
+    if (parent.closest('.vditor-ir__marker--pre')) continue     // 代码块可编辑源(只处理 preview)
+    if (cursorBlock && cursorBlock.contains(t)) continue        // 光标所在块,编辑中跳过
+    const block = parent.closest('[data-source-line], pre.vditor-ir__preview') as Element | null
+    if (block && !blockInVp(block)) continue                    // 视口外
+    nodes.push({ node: t, start: full.length, len: txt.length })
+    full += txt
+  }
+  if (full.indexOf('#') < 0) return
+  const matches = Array.from(full.matchAll(SWATCH_COLOR_RE))
+  // 从后往前插入,避免 splitText 影响前面 match 的偏移定位
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const gIdx = matches[i].index || 0
+    const color = matches[i][0]
+    // 二分定位 gIdx(颜色起始 "#")落在哪个文本节点
+    let lo = 0, hi = nodes.length - 1, ni = -1
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      const s = nodes[mid].start
+      if (gIdx < s) hi = mid - 1
+      else if (gIdx >= s + nodes[mid].len) lo = mid + 1
+      else { ni = mid; break }
+    }
+    if (ni < 0) continue
+    const tn = nodes[ni].node
+    const local = gIdx - nodes[ni].start
+    const after = local === 0 ? tn : tn.splitText(local)
+    const sw = document.createElement('span')
+    sw.className = 'vmd-color-swatch'
+    sw.setAttribute('contenteditable', 'false')
+    sw.style.background = color
+    after.parentNode && after.parentNode.insertBefore(sw, after)
+  }
 }
 
 function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLine: number) {
@@ -282,11 +390,11 @@ function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: numbe
   // gutter 还没 appendChild,getComputedStyle 拿不到 class 样式,直接读 root 上的 CSS 变量
   const codeFs = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vscode-editor-font-size')) || 14
   // 用父元素 line-height 做垂直居中(glyph rect 偏小、补出来的偏移不够);拿不到就退回到 glyph 高度
-  const elLh = parseFloat(cs.lineHeight) || firstRect.height
   let html = ''
   for (let i = 0; i < numLines; i++) {
     const lr = lineRects[i] || firstRect
-    const y = lr.top - elRect.top + Math.max(0, (elLh - codeFs) * 0.05)
+    // 定位到该行几何中心(glyph top + 半 glyph 高),配合 CSS translateY(-50%) 居中,与 cursor 模式一致
+    const y = lr.top - elRect.top + lr.height / 2
     html += `<div style="top:${y}px">${startLine + i}</div>`
   }
   gutter.innerHTML = html
@@ -326,46 +434,59 @@ function getCharRect(el: HTMLElement, charIndex: number): DOMRect | null {
   return null
 }
 
-// vditor 在 input/回车/删除后会异步 mutation 重渲染 DOM,我们的 overlay 会被擦掉、[data-source-line] 也变。
-// 用 MutationObserver 监听 root 内变化,rAF 合并多次 mutation,自动重 attach。防自身触发:每次 attach 前 disconnect、attach 后 reconnect。
-let lineMo: MutationObserver | null = null
-let attachRafId: number | null = null
+// 不再用 MutationObserver:vditor 在光标移动时也频繁改 DOM(IR 模式光标进出节点会展开/收起 markdown 标记),
+// 监听 childList 会让"光标移动"也触发全量 attach,大文档下卡顿明显(实测光标延迟、回车后持续卡的元凶)。
+// 改为纯事件驱动:input(内容变化)+ scroll(视口移动)+ 初次 after() 触发,vditor 自身的光标 DOM 操作不再打扰我们。
+let attachTimer: any = null
+// _typing:输入进行中标志。为真时冻结一切 attach / cursor 更新,主线程完全让给 vditor 渲染,
+// 手感等同裸 vditor。输入停止 500ms 后(见 input())才解冻并补一次行号。
+// 输入会引发 ResizeObserver(编辑区变高)/ scroll / worker 回传等多路 attach 触发,全靠这个标志一并挡掉。
+let _typing = false
+// 文档规模自适应:小文档 attach 只要几 ms,用即时响应(无感延迟);大文档(>1200 行)attach 重,
+// 才用保守 debounce + 输入冻结防卡。initVditor 时按内容行数判定。
+let _isLargeDoc = false
+const LARGE_DOC_LINES = 1200
+// scheduleAttach:小文档 30ms 后直接跑(行号几乎即时跟随);大文档 400ms trailing + idle(防卡)。
 function scheduleAttach() {
-  if (attachRafId != null) return
-  attachRafId = requestAnimationFrame(() => {
-    attachRafId = null
-    lineMo?.disconnect()
-    attachLineNumbers()
-    bindLineMo()
-  })
+  if (_typing) return
+  if (attachTimer) clearTimeout(attachTimer)
+  attachTimer = setTimeout(() => {
+    attachTimer = null
+    if (_isLargeDoc && typeof (window as any).requestIdleCallback === 'function') {
+      ;(window as any).requestIdleCallback(() => attachLineNumbers(), { timeout: 600 })
+    } else {
+      attachLineNumbers()   // 小文档直接跑,几 ms,无需 idle 拖延
+    }
+  }, _isLargeDoc ? 400 : 30)
 }
-function bindLineMo() {
-  if (!document.body.classList.contains('lineno-on')) return
-  const root = getVisibleEditorRoot()
-  if (!root) return
-  if (!lineMo) lineMo = new MutationObserver(scheduleAttach)
-  // 性能优化:只监听结构变化,不监听 attribute(光标 blink、IR expand class 切换 等高频 attribute 变化全部忽略)。
-  // 代价:代码块 enter/exit 编辑态时短暂没重 attach,但 vditor 'input' 事件已主动触发 attach,覆盖了主要场景
-  lineMo.observe(root, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-  })
-}
-function detachLineMo() {
-  lineMo?.disconnect()
-  if (attachRafId != null) { cancelAnimationFrame(attachRafId); attachRafId = null }
-}
+// 保留空壳,避免改其他调用点(observer 已移除)
+function bindLineMo() {}
+function detachLineMo() { if (attachTimer) { clearTimeout(attachTimer); attachTimer = null } }
 ;(window as any).__attachLineNumbers = scheduleAttach
 ;(window as any).__detachLineNumbers = detachLineMo
+// 色块开关切换时即时重建/清除(不走 attach 的 debounce)
+;(window as any).__refreshSwatches = () => {
+  const root = getVisibleEditorRoot()
+  if (root) attachColorSwatches(root)
+}
 
 // 光标模式:lineno-off 时只显示光标所在最近 [data-source-line] 祖先的行号。
 // 监听 selectionchange,rAF 节流,给该元素加 .vmd-cursor-on(CSS 让它 ::after 显示)
 let cursorRafId: number | null = null
+let _curCursorEl: Element | null = null  // 缓存当前标记元素,避免每次 selectionchange 全文档 querySelectorAll
 function updateCursorMarker() {
   cursorRafId = null
-  // 清掉所有旧标记
-  document.querySelectorAll('.vmd-cursor-on').forEach((e) => e.classList.remove('vmd-cursor-on'))
+  // 光标移动后重建色块:让之前处于编辑态(光标在内)的块恢复渲染态时显示色块。两种模式都需要
+  const ccRoot = getVisibleEditorRoot()
+  if (ccRoot) attachColorSwatches(ccRoot)
+  // 只移除上次标记的那一个元素,不全文档 querySelectorAll('.vmd-cursor-on')
+  // (大文档输入时光标频繁变,每次全扫 5000 元素累积成可感卡顿)
+  if (_curCursorEl) {
+    _curCursorEl.classList.remove('vmd-cursor-on')
+    _curCursorEl.removeAttribute('data-cursor-line')
+    ;(_curCursorEl as HTMLElement).style.removeProperty('--vmd-cursor-y')
+    _curCursorEl = null
+  }
   if (document.body.classList.contains('lineno-on')) return // 全开模式不需要 cursor 标记
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0) return
@@ -377,17 +498,109 @@ function updateCursorMarker() {
   while (el && !(el as HTMLElement).hasAttribute?.('data-source-line')) {
     el = el.parentElement
   }
-  if (el) el.classList.add('vmd-cursor-on')
+  if (!el) return
+  el.classList.add('vmd-cursor-on')
+  _curCursorEl = el
+  // 多行(硬换行)段落:整段一个 [data-source-line],默认只显示起始行号。算光标在段落内第几行,
+  // 显示光标行的源行号(data-cursor-line)并把行号定位到光标行的 Y(--vmd-cursor-y)
+  const startLine = parseInt(el.getAttribute('data-source-line') || '0')
+  const endLine = parseInt(el.getAttribute('data-source-line-end') || '0')
+  if (endLine > startLine) {
+    try {
+      const pre = document.createRange()
+      pre.setStart(el, 0)
+      pre.setEnd(range.startContainer, range.startOffset)
+      const lineOffset = (pre.toString().match(/\n/g) || []).length
+      const cursorLine = Math.min(startLine + lineOffset, endLine)
+      el.setAttribute('data-cursor-line', String(cursorLine))
+      // 定位到光标行的几何中心(caret top + 半行高),配合 CSS translateY(-50%) 居中。
+      // 与 lineno-on 的 buildParagraphGutter(glyph 中心)数学上重合 → 开/关行号位置一致。
+      const caretRect = range.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      const cy = caretRect.top - elRect.top + caretRect.height / 2
+      ;(el as HTMLElement).style.setProperty('--vmd-cursor-y', cy + 'px')
+    } catch {}
+  }
 }
 document.addEventListener('selectionchange', () => {
+  if (_typing) return  // 输入中不更新 cursor 标记(光标在动无意义),省掉每按键的 updateCursorMarker
   if (cursorRafId != null) return
   cursorRafId = requestAnimationFrame(updateCursorMarker)
 })
 ;(window as any).__updateCursorMarker = updateCursorMarker
 
+// 修复 vditor IR 点击代码块进入编辑态时光标被强制重置到开头:
+// mousedown 时记下点击位置在代码块文本里的字符偏移,等 vditor expand 成编辑态后,把光标恢复到该偏移。
+// container→offset 用 Range.toString().length 算;恢复用 TreeWalker 按偏移定位文本节点。
+function caretOffsetOf(root: Node, container: Node, off: number): number {
+  try {
+    const r = document.createRange()
+    r.selectNodeContents(root)
+    r.setEnd(container, off)
+    return r.toString().length
+  } catch { return -1 }
+}
+function setCaretAtOffset(el: HTMLElement, offset: number): boolean {
+  let count = 0
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let n: Node | null
+  while ((n = walker.nextNode())) {
+    const len = (n.textContent || '').length
+    if (count + len >= offset) {
+      const sel = window.getSelection()
+      if (!sel) return false
+      const range = document.createRange()
+      range.setStart(n, Math.max(0, Math.min(len, offset - count)))
+      range.collapse(true)
+      sel.removeAllRanges()
+      sel.addRange(range)
+      return true
+    }
+    count += len
+  }
+  return false
+}
+document.addEventListener('mousedown', (e: MouseEvent) => {
+  const target = e.target as Element | null
+  const preview = target && target.closest ? target.closest('pre.vditor-ir__preview') as HTMLElement | null : null
+  if (!preview) return
+  const cr = (document as any).caretRangeFromPoint ? (document as any).caretRangeFromPoint(e.clientX, e.clientY) : null
+  if (!cr) return
+  const offset = caretOffsetOf(preview, cr.startContainer, cr.startOffset)
+  if (offset < 0) return
+  const codeBlock = preview.closest('[data-type="code-block"]') as HTMLElement | null
+  if (!codeBlock) return
+  // vditor 在 click/mouseup 后才 expand 并把光标设到开头(实测发生在我们第一帧之后),
+  // 所以持续几帧都把光标设回点击位置 —— vditor 设开头后被后续帧覆盖,最后一帧我们赢。
+  let tries = 0
+  const restore = () => {
+    const editCode = (codeBlock.querySelector('.vditor-ir__marker--pre code')
+      || codeBlock.querySelector('pre code')) as HTMLElement | null
+    if (editCode && editCode.offsetParent !== null) {
+      setCaretAtOffset(editCode, offset)
+    }
+    if (tries++ < 8) requestAnimationFrame(restore)
+  }
+  requestAnimationFrame(restore)
+}, true)
+
+// webview tab 切出去再切回来时:vditor 的 layout 状态可能瞬时不一致(工具栏挤换行、内容区空白闪烁)。
+// 切回(visibilitychange,!hidden)时主动触发 forced reflow + 重 attach 行号,让浏览器重画。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return
+  requestAnimationFrame(() => {
+    // 触发一次 layout 计算让浏览器 reflow vditor 内的元素
+    void document.body.offsetHeight
+    scheduleAttach()
+    updateCursorMarker()
+  })
+})
+
 
 function initVditor(msg) {
   console.log('msg', msg)
+  // 按内容行数判定文档规模,决定行号刷新策略(小文档即时 / 大文档保守防卡)
+  _isLargeDoc = (msg.content || '').split('\n').length > LARGE_DOC_LINES
   let inputTimer
   let defaultOptions: any = {}
   defaultOptions = merge(defaultOptions, msg.options, {
@@ -432,8 +645,14 @@ function initVditor(msg) {
       fixTableIr()
       fixPanelHover()
       fixOutlineCloseScroll()
-      attachLineNumbers()
-      bindLineMo()
+      // 首次 attach 延迟到 idle callback:大文档(数千行)attach 要全量 Lute 解析 + DOM 遍历,
+      // 同步跑会卡住首屏可见时间。延迟后用户先看到内容,行号慢一拍出来,体感快很多。
+      const firstAttach = () => { attachLineNumbers(); bindLineMo() }
+      if (typeof (window as any).requestIdleCallback === 'function') {
+        ;(window as any).requestIdleCallback(firstAttach, { timeout: 500 })
+      } else {
+        setTimeout(firstAttach, 0)
+      }
       // 窗口/容器尺寸变化时重算行号(wrap 行数/位置会变,绝对定位的 overlay 必须跟着重排)
       // debounce 50ms 避免拖拽 resize 时高频重算;走 scheduleAttach 让 MutationObserver disconnect/reconnect 配套
       let resizeTimer: any = null
@@ -448,13 +667,34 @@ function initVditor(msg) {
       } else {
         window.addEventListener('resize', scheduleReattach)
       }
+      // scroll 触发也要 reattach:视口剪裁让"视口外"元素没 gutter-y,滚动后这些元素进入视口要补算
+      // 直接挂在 root 的可能的滚动祖先上;window scroll 作 fallback
+      window.addEventListener('scroll', scheduleReattach, { passive: true, capture: true })
     },
     input() {
-      scheduleAttach()
-      inputTimer && clearTimeout(inputTimer)
-      inputTimer = setTimeout(() => {
-        vscode.postMessage({ command: 'edit', content: vditor.getValue() })
-      }, 100)
+      if (_isLargeDoc) {
+        // 大文档:输入进行中冻结 attach / cursor(防卡),主线程让给 vditor。停 500ms 后解冻补行号。
+        _typing = true
+        inputTimer && clearTimeout(inputTimer)
+        inputTimer = setTimeout(() => {
+          _typing = false
+          scheduleAttach()
+          if ((window as any).__updateCursorMarker) (window as any).__updateCursorMarker()
+          const send = () => vscode.postMessage({ command: 'edit', content: vditor.getValue() })
+          if (typeof (window as any).requestIdleCallback === 'function') {
+            ;(window as any).requestIdleCallback(send, { timeout: 2000 })
+          } else {
+            send()
+          }
+        }, 500)
+      } else {
+        // 小文档:不冻结,立即调度 attach(30ms 后),行号即时跟随;getValue 短 debounce 同步
+        scheduleAttach()
+        inputTimer && clearTimeout(inputTimer)
+        inputTimer = setTimeout(() => {
+          vscode.postMessage({ command: 'edit', content: vditor.getValue() })
+        }, 150)
+      }
     },
     upload: {
       url: '/fuzzy', // 没有 url 参数粘贴图片无法上传 see: https://github.com/Vanessa219/vditor/blob/d7628a0a7cfe5d28b055469bf06fb0ba5cfaa1b2/src/ts/util/fixBrowserBehavior.ts#L1409

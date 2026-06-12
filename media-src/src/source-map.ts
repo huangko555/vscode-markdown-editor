@@ -17,7 +17,7 @@
 declare const Lute: any
 declare const vscode: any
 
-type Hit = {
+export type Hit = {
   tag: string          // 'p' | 'h' | 'list' | 'li' | 'blockquote' | 'table' | 'tr' | 'code' | 'hr'
   sourceLine: number   // 1-based 行号(VS Code buffer 行号)
   lineEnd: number
@@ -46,7 +46,7 @@ let _lastAppliedBlockCount: number = -1
 // ----------------------------------------------------------------------------
 // 强 normalize:把任意一段文字归一化成签名,buffer 端跟 DOM 端都用同一套
 // ----------------------------------------------------------------------------
-function normalizeSig(s: string): string {
+export function normalizeSig(s: string): string {
   if (!s) return ''
   let r = s
   // 全角字符转半角(ASCII 范围内)
@@ -77,7 +77,7 @@ function normalizeSig(s: string): string {
 // ----------------------------------------------------------------------------
 // 用 Lute 走一遍 source,收集 Hit 序列
 // ----------------------------------------------------------------------------
-function parseHits(source: string): Hit[] {
+export function parseHits(source: string): Hit[] {
   // 缓存命中:源没变直接复用上次结果
   if (source === _lastSource && _lastHits.length > 0) return _lastHits
 
@@ -162,6 +162,8 @@ function parseHits(source: string): Hit[] {
     renderThematicBreak: hrCb,
     renderText:          leafCb,
     renderCodeBlockCode: leafCb,
+    renderCodeSpanContent: leafCb,  // inline code 内文字(否则 DOM 走 textContent 会拿到,两边 sig 错配)
+    renderLinkText:      leafCb,
     renderHeadingC8hMarker: leafCb,
   }
 
@@ -230,6 +232,11 @@ function innerCandidates(el: Element): Element[] {
 
 type DomBlock = { el: Element; tag: string; sig: string; isAnchor: boolean }
 
+// 签名缓存:大文档 attach 主线程大头是 getDomBlocks 给每个块算签名(walkText 遍历 + normalizeSig 正则)。
+// 编辑只动少数块,其余块内容没变 → 用 textContent 指纹(长度 + 前 24 字符)判断未变就复用上次签名,
+// 跳过 walkText+normalizeSig。WeakMap 随元素回收自动清理。
+const _domSigCache = new WeakMap<Element, { key: string; sig: string }>()
+
 function getDomBlocks(root: HTMLElement): DomBlock[] {
   const out: DomBlock[] = []
   function walkText(el: Element, buf: string[], stopAt: number) {
@@ -251,9 +258,19 @@ function getDomBlocks(root: HTMLElement): DomBlock[] {
     if (r.yes) {
       const tag = el.tagName.toLowerCase()
       const tagN = r.isCodeBlock ? 'div' : tag
-      const buf: string[] = []
-      walkText(el, buf, 80)
-      const sig = normalizeSig(buf.join(''))
+      // 指纹:textContent 原生拼接(C++ 实现,远快于 JS walkText),内容不变则复用缓存签名
+      const tc = el.textContent || ''
+      const key = tc.length + '|' + tc.slice(0, 24)
+      const cached = _domSigCache.get(el)
+      let sig: string
+      if (cached && cached.key === key) {
+        sig = cached.sig
+      } else {
+        const buf: string[] = []
+        walkText(el, buf, 80)
+        sig = normalizeSig(buf.join(''))
+        _domSigCache.set(el, { key, sig })
+      }
       out.push({ el, tag: tagN, sig, isAnchor: r.isAnchor })
       if (r.isCodeBlock) return
     }
@@ -374,6 +391,69 @@ function setAttrIfChanged(el: Element, name: string, value: string | null) {
   }
 }
 
+// ============================================================================
+// Web Worker:把 550ms 的 Lute 全文解析移出主线程(实测 parse 占 attach 总耗时 95%+)。
+// lute 不依赖 DOM(grep document/window 零命中),可在 worker 跑;用 blob worker(同源)避开
+// vscode webview 跨源 worker 限制。worker 文件 = lute.min.js + parse-worker 逻辑,构建时拼接。
+// 流程:buffer 变 → requestParse 发 worker(异步)→ 主线程先用上一版 hits 对齐 → worker 回传新
+// hits → 触发重 attach 精确对齐。主线程永不 parse,只 align+apply(~40ms),停下来几乎无感。
+// ============================================================================
+let _worker: Worker | null = null
+let _workerInitTried = false
+let _workerHits: Hit[] = []
+let _workerHitsSource = ''
+let _inflightSource: string | null = null   // 正在 worker 解析的 source
+let _pendingSource: string | null = null    // worker 忙时排队的最新 source
+let _workerFailed = false                    // worker 不可用(fetch 被 CSP 拦 / 创建失败)→ 降级主线程解析
+
+function ensureWorker() {
+  if (_worker || _workerInitTried) return
+  _workerInitTried = true
+  try {
+    const luteScript = document.getElementById('vditorLuteScript') as HTMLScriptElement | null
+    if (!luteScript || !luteScript.src) { _workerFailed = true; return }
+    const workerUrl = luteScript.src.replace(/lute\.min\.js(\?[^]*)?$/, 'parse-worker.js')
+    // fetch worker 脚本文本 → blob URL → new Worker:blob worker 继承文档源(同源),
+    // 内含 lute,无需 importScripts 跨源资源,绕开 webview CSP / 跨源 worker 限制
+    fetch(workerUrl).then(r => r.text()).then(code => {
+      const blob = new Blob([code], { type: 'application/javascript' })
+      const w = new Worker(URL.createObjectURL(blob))
+      w.onmessage = (e: MessageEvent) => {
+        const d = e.data || {}
+        _workerHits = d.hits || []
+        _workerHitsSource = d.source || ''
+        _inflightSource = null
+        // 解析期间又有新 source 排队 → 继续发
+        if (_pendingSource != null && _pendingSource !== _workerHitsSource) {
+          _inflightSource = _pendingSource
+          _pendingSource = null
+          w.postMessage(_inflightSource)
+        }
+        // 用新 hits 触发一次重对齐
+        try { (window as any).__attachLineNumbers && (window as any).__attachLineNumbers() } catch {}
+      }
+      _worker = w
+      if (_pendingSource != null) {
+        _inflightSource = _pendingSource
+        _pendingSource = null
+        w.postMessage(_inflightSource)
+      }
+    }).catch(() => {
+      _workerFailed = true
+      try { (window as any).__attachLineNumbers && (window as any).__attachLineNumbers() } catch {}
+    })
+  } catch { _workerFailed = true }
+}
+
+function requestParse(source: string) {
+  if (source === _workerHitsSource) return   // 已是最新结果
+  if (source === _inflightSource) return     // 正在解析同一个
+  ensureWorker()
+  if (!_worker || _inflightSource != null) { _pendingSource = source; return }  // 没就绪 / 忙 → 排队
+  _inflightSource = source
+  _worker.postMessage(source)
+}
+
 export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
   // 用 VS Code buffer 作为权威源,buffer 未到就退回到 vditor.getValue()(初始那一瞬间用)
   const buffer = (window as any).__vscodeBuffer
@@ -383,15 +463,25 @@ export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
 
   if (!source) return
 
-  // 快速短路:source 跟上次一致 + DOM 块数没变就跳过整套对齐(常见编辑期 mutation observer 的伪触发)
-  // querySelectorAll('[data-source-line]') 比走整棵树算 block 快得多
-  if (source === _lastAppliedSource) {
+  // worker 可用:异步请求解析,先用缓存 hits 对齐(回传后重对齐);worker 不可用:降级主线程同步 parse(会卡但保功能)
+  let hits: Hit[]
+  let hitsSource: string
+  if (_workerFailed) {
+    hits = parseHits(source)
+    hitsSource = source
+  } else {
+    requestParse(source)
+    hits = _workerHits
+    hitsSource = _workerHitsSource
+  }
+  if (hits.length === 0) return   // worker 首次还没返回,行号稍后(~550ms)出现
+
+  // 快速短路:hits 没更新 + DOM 块数没变 → 跳过整套对齐
+  if (hitsSource === _lastAppliedSource) {
     const liveCount = root.querySelectorAll('[data-source-line]').length
     if (liveCount === _lastAppliedBlockCount) return
   }
 
-  const hits = parseHits(source)
-  if (hits.length === 0) return
   const blocks = getDomBlocks(root)
   const result = align(hits, blocks)
 
@@ -416,18 +506,20 @@ export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
     }
   })
 
-  // 记录这次 apply 的状态,下次进 attach 时短路用
-  _lastAppliedSource = source
+  // 记录用 hits(对应 hitsSource)对齐后的状态,下次短路用
+  _lastAppliedSource = hitsSource
   _lastAppliedBlockCount = matchedSet.size
 
   // 保存到 window 供 dump 用
-  ;(window as any).__lastAlignResult = { hits, blocks, result, source }
+  ;(window as any).__lastAlignResult = { hits, blocks, result, source: hitsSource }
 }
 
 // ----------------------------------------------------------------------------
 // 自动 dump 诊断数据给扩展端,扩展端写到磁盘文件供 Claude 直接读
+// 注:本文件会被 parse-worker bundle 进 worker(为复用 parseHits),worker 无 window;
+// 用 globalThis(worker 里 = self,主线程 = window)挂这些调试入口,worker 加载时不报错
 // ----------------------------------------------------------------------------
-;(window as any).__debugSourceMapDump = function () {
+;(globalThis as any).__debugSourceMapDump = function () {
   try {
     const r = (window as any).__lastAlignResult
     if (!r) return
@@ -472,7 +564,7 @@ export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
 }
 
 // 手动入口:在 webview devtools console 调 __debugSourceMap()
-;(window as any).__debugSourceMap = function () {
+;(globalThis as any).__debugSourceMap = function () {
   const r = (window as any).__lastAlignResult
   if (!r) { console.log('no align result yet'); return }
   const { hits, blocks, result } = r
