@@ -38,8 +38,9 @@ try {
   }
 } catch {}
 
-// 行号映射:用 markdown-it 解析源 md 拿 token.map 源行号,注入到 vditor DOM 的 data-source-line
-// 再算每个标了 data-source-line 的元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列
+// 行号映射:用 vditor 内置 Lute parser 解析源 md(跟 IR DOM 同 parser,AST 1:1 对应 DOM),
+// 把源行号注入到 data-source-line。再算每个元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列。
+// 注入逻辑全在 source-map.ts 里
 function attachLineNumbers() {
   if (!(window as any).vditor) return
   if (!document.body.classList.contains('lineno-on')) return
@@ -62,7 +63,7 @@ function attachLineNumbers() {
     if (code) buildCodeGutter(preview, code, startLine + 1)
   })
 
-  // 多行段落:markdown-it 把连续非空行合成一个 paragraph token,只给 1 个 startLine
+  // 多行段落:Lute 把连续非空行合成一个 paragraph 节点,只给 1 个 startLine。
   // 用 Range 实测每行可视 Y,overlay 每行单独显示行号(顶层段落 + blockquote 内段落都走这里)
   root.querySelectorAll<HTMLElement>('[data-source-line-end]').forEach(p => {
     const startLine = parseInt(p.getAttribute('data-source-line') || '0')
@@ -74,20 +75,71 @@ function attachLineNumbers() {
   // x:::after 是 position:absolute,基准是 padding-box;blockquote 有 border-left,要扣掉
   // y:对齐到第一行视觉中心(padTop + lineHeight/2),wrap 时不再用元素整体中点(会落到行间空白)
   const rootRect = root.getBoundingClientRect()
+  // 按元素引用缓存 visualTop:本帧内同元素多次问询直接命中,避免 Range.getBoundingClientRect 重复测算
+  const visualTopCache = new WeakMap<HTMLElement, number | null>()
+  // 找元素内第一个非空白字符的 Y 坐标(相对 el padding-box 顶部),让 ::after 准确落到真正可见内容上。
+  // vditor 在某些 paragraph 开头会塞 \n 等空白制造视觉间距,直接用 lineHeight*0.45 会把行号定位到那个空行。
+  function firstVisibleCharTop(el: HTMLElement): number | null {
+    if (visualTopCache.has(el)) return visualTopCache.get(el) as number | null
+    let result: number | null = null
+    const elTop = el.getBoundingClientRect().top
+    function walk(node: Node): boolean {
+      if (result !== null) return true
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || ''
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i]
+          if (ch === '\n' || ch === ' ' || ch === '\t' || ch === '\r') continue
+          try {
+            const r = document.createRange()
+            r.setStart(node, i); r.setEnd(node, i + 1)
+            const rect = r.getBoundingClientRect()
+            if (rect.height > 0) { result = rect.top - elTop; return true }
+          } catch {}
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const e = node as Element
+        // 跳过 marker(vditor-ir__marker)
+        if (e.classList && e.classList.contains('vditor-ir__marker')) return false
+        for (let i = 0; i < e.childNodes.length; i++) {
+          if (walk(e.childNodes[i])) return true
+        }
+      }
+      return false
+    }
+    walk(el)
+    visualTopCache.set(el, result)
+    return result
+  }
   root.querySelectorAll<HTMLElement>('[data-source-line]').forEach(el => {
     const elRect = el.getBoundingClientRect()
     const cs = getComputedStyle(el)
     const borderLeft = parseFloat(cs.borderLeftWidth) || 0
     el.style.setProperty('--vmd-gutter-x', (-(elRect.left - rootRect.left) + 5 - borderLeft) + 'px')
     const elLh = parseFloat(cs.lineHeight)
-    if (elLh && elLh > 0) {
+    // 优先用首个可见字符的实测 Y(避开 leading \n 等空白);拿不到再退回 padTop+lineHeight*0.45
+    const visualTop = firstVisibleCharTop(el)
+    if (visualTop !== null && elLh && elLh > 0) {
+      el.style.setProperty('--vmd-gutter-y', (visualTop + elLh * 0.45) + 'px')
+    } else if (elLh && elLh > 0) {
       const padTop = parseFloat(cs.paddingTop) || 0
-      // 0.45 比正中(0.5)略上偏,矫正数字行槽视觉重心偏低的错觉
       el.style.setProperty('--vmd-gutter-y', (padTop + elLh * 0.45) + 'px')
     } else {
       el.style.removeProperty('--vmd-gutter-y')
     }
   })
+
+  // 顺便刷新 cursor 标记(初次加载、edit 后 DOM 变化时 cursor 所在元素可能改了)
+  try {
+    const fn = (window as any).__updateCursorMarker
+    if (typeof fn === 'function') fn()
+  } catch {}
+
+  // 自动 dump 诊断数据给扩展端,扩展端会写到磁盘文件供 Claude 读
+  try {
+    const fn = (window as any).__debugSourceMapDump
+    if (typeof fn === 'function') fn()
+  } catch {}
 }
 
 function buildCodeGutter(preview: HTMLElement, code: HTMLElement, contentStartLine: number) {
@@ -142,10 +194,20 @@ function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: numbe
   const numLines = endLine - startLine + 1
 
   // 扁平收集所有 text node(包括 marker 内的,因为 \n 计数要算它们的字符)
-  const textNodes: Text[] = []
+  // 关键:vditor IR 用 <br> 表示 hard break,textContent 里没有 \n。
+  // 遇到 <br> 在 textNodes 流里塞一个虚拟 "\n" 文本节点占位,line 计数才能对
+  const textNodes: (Text | { isSyntheticBr: true; textContent: '\n' })[] = []
   function collect(n: Node) {
-    if (n.nodeType === Node.TEXT_NODE) textNodes.push(n as Text)
-    else for (let i = 0; i < n.childNodes.length; i++) collect(n.childNodes[i])
+    if (n.nodeType === Node.TEXT_NODE) {
+      textNodes.push(n as Text)
+    } else if (n.nodeType === Node.ELEMENT_NODE) {
+      const e = n as Element
+      if (e.tagName === 'BR') {
+        textNodes.push({ isSyntheticBr: true, textContent: '\n' } as any)
+      } else {
+        for (let i = 0; i < e.childNodes.length; i++) collect(e.childNodes[i])
+      }
+    }
   }
   collect(el)
 
@@ -159,13 +221,19 @@ function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: numbe
   // 从某个全局字符索引 fromIdx 起,找到第一个可视字符(非 marker、非空白、有 height)的 rect
   function findRectFrom(fromIdx: number): { top: number; height: number } | null {
     let count = 0
-    for (const tn of textNodes) {
+    for (const tn of textNodes as any[]) {
       const text = tn.textContent || ''
       const len = text.length
       if (count + len <= fromIdx) { count += len; continue }
+      // 虚拟 BR 占位:不能 setRange,跳过它,从下一个真实 text node 继续
+      if (tn.isSyntheticBr) {
+        count += len
+        if (fromIdx < count) fromIdx = count
+        continue
+      }
       const startOff = Math.max(0, fromIdx - count)
       // 跳过 marker span 内的 text node
-      let p = tn.parentElement
+      let p = (tn as Text).parentElement
       let inMarker = false
       while (p && p !== el) {
         if (p.classList && p.classList.contains('vditor-ir__marker')) { inMarker = true; break }
@@ -176,7 +244,7 @@ function buildParagraphGutter(el: HTMLElement, startLine: number, endLine: numbe
           const ch = text[off]
           if (ch === '\n' || ch === ' ' || ch === '\t') continue
           const r = document.createRange()
-          try { r.setStart(tn, off); r.setEnd(tn, off + 1) } catch { continue }
+          try { r.setStart(tn as Text, off); r.setEnd(tn as Text, off + 1) } catch { continue }
           const rect = r.getBoundingClientRect()
           if (rect.height > 0 && rect.width > 0) return { top: rect.top, height: rect.height }
         }
@@ -276,15 +344,12 @@ function bindLineMo() {
   const root = getVisibleEditorRoot()
   if (!root) return
   if (!lineMo) lineMo = new MutationObserver(scheduleAttach)
-  // 加 attributes:vditor 退出代码块编辑时只切 class/style(preview ↔ edit),
-  // 不监听属性变化的话 overlay 不会被重 attach。
-  // 只盯 class/style 收敛事件量,attach 期间已 disconnect 不会形成回路
+  // 性能优化:只监听结构变化,不监听 attribute(光标 blink、IR expand class 切换 等高频 attribute 变化全部忽略)。
+  // 代价:代码块 enter/exit 编辑态时短暂没重 attach,但 vditor 'input' 事件已主动触发 attach,覆盖了主要场景
   lineMo.observe(root, {
     childList: true,
     subtree: true,
     characterData: true,
-    attributes: true,
-    attributeFilter: ['class', 'style'],
   })
 }
 function detachLineMo() {
@@ -293,6 +358,32 @@ function detachLineMo() {
 }
 ;(window as any).__attachLineNumbers = scheduleAttach
 ;(window as any).__detachLineNumbers = detachLineMo
+
+// 光标模式:lineno-off 时只显示光标所在最近 [data-source-line] 祖先的行号。
+// 监听 selectionchange,rAF 节流,给该元素加 .vmd-cursor-on(CSS 让它 ::after 显示)
+let cursorRafId: number | null = null
+function updateCursorMarker() {
+  cursorRafId = null
+  // 清掉所有旧标记
+  document.querySelectorAll('.vmd-cursor-on').forEach((e) => e.classList.remove('vmd-cursor-on'))
+  if (document.body.classList.contains('lineno-on')) return // 全开模式不需要 cursor 标记
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  const start = range.startContainer
+  let el: Element | null = start.nodeType === Node.ELEMENT_NODE
+    ? (start as Element)
+    : start.parentElement
+  while (el && !(el as HTMLElement).hasAttribute?.('data-source-line')) {
+    el = el.parentElement
+  }
+  if (el) el.classList.add('vmd-cursor-on')
+}
+document.addEventListener('selectionchange', () => {
+  if (cursorRafId != null) return
+  cursorRafId = requestAnimationFrame(updateCursorMarker)
+})
+;(window as any).__updateCursorMarker = updateCursorMarker
 
 
 function initVditor(msg) {
@@ -394,6 +485,15 @@ window.addEventListener('message', (e) => {
   const msg = e.data
   // console.log('msg from vscode', msg)
   switch (msg.command) {
+    case 'vscode-buffer': {
+      const next = msg.content || ''
+      const prev = (window as any).__vscodeBuffer
+      // buffer 真没变就不触发 attach,大幅减少编辑期间的重算开销
+      if (prev === next) break
+      ;(window as any).__vscodeBuffer = next
+      ;(window as any).__attachLineNumbers && (window as any).__attachLineNumbers()
+      break
+    }
     case 'update': {
       if (msg.type === 'init') {
         if (msg.options && msg.options.useVscodeThemeColor) {
@@ -444,3 +544,5 @@ fixLinkClick()
 fixCut()
 
 vscode.postMessage({ command: 'ready' })
+// 让扩展端把 VS Code 文件 buffer 推一次过来,行号注入要用 buffer 作为权威源
+vscode.postMessage({ command: 'request-buffer' })

@@ -240,11 +240,33 @@ class EditorPanel {
             if (this._panel.active) {
               await syncToEditor()
               this._updateEditTitle()
+              // 同步完后立刻把 buffer 内容传给 webview 作为行号注入的源头(buffer 才是行号真相)
+              this._panel.webview.postMessage({
+                command: 'vscode-buffer',
+                content: this._document ? this._document.getText() : '',
+              })
             }
+            break
+          }
+          case 'request-buffer': {
+            // webview 主动要 buffer(初始 attach / Reload 时)
+            this._panel.webview.postMessage({
+              command: 'vscode-buffer',
+              content: this._document ? this._document.getText() : '',
+            })
             break
           }
           case 'reset-config': {
             await this._context.globalState.update(KeyVditorOptions, {})
+            break
+          }
+          case 'debug-dump': {
+            // webview 自动 dump 行号注入诊断到磁盘,Claude 直接读这个文件不用用户参与
+            try {
+              const debugPath = NodePath.join(this._context.globalStorageUri.fsPath, 'vditor-md-debug.json')
+              await vscode.workspace.fs.createDirectory(this._context.globalStorageUri)
+              await vscode.workspace.fs.writeFile(vscode.Uri.file(debugPath), Buffer.from(message.content || '', 'utf8'))
+            } catch {}
             break
           }
           case 'save': {
@@ -383,6 +405,9 @@ class EditorPanel {
     const toMediaPath = (f: string) => `media/dist/${f}`
     const JsFiles = ['main.js'].map(toMediaPath).map(toUri)
     const CssFiles = ['main.css'].map(toMediaPath).map(toUri)
+    // 改过的 Lute(AST Node 加了 Line 字段):提前用 id="vditorLuteScript" 注入,
+    // vditor addScript 看到 id 已存在会跳过它的远程 CDN 加载,用我们这份
+    const luteUri = toUri(toMediaPath('lute.min.js'))
 
     return (
       `<!DOCTYPE html>
@@ -405,6 +430,7 @@ class EditorPanel {
 				<div id="app"></div>
 
 
+				<script id="vditorLuteScript" src="${luteUri}"></script>
 				${JsFiles.map((f) => `<script src="${f}"></script>`).join('\n')}
 			</body>
 			</html>`
@@ -516,11 +542,29 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           if (webviewPanel.active) {
             await syncToEditor()
             updateEditTitle()
+            webviewPanel.webview.postMessage({
+              command: 'vscode-buffer',
+              content: document.getText(),
+            })
           }
+          break
+        case 'request-buffer':
+          webviewPanel.webview.postMessage({
+            command: 'vscode-buffer',
+            content: document.getText(),
+          })
           break
         case 'reset-config':
           await this.context.globalState.update(KeyVditorOptions, {})
           break
+        case 'debug-dump': {
+          try {
+            const debugPath = NodePath.join(this.context.globalStorageUri.fsPath, 'vditor-md-debug.json')
+            await vscode.workspace.fs.createDirectory(this.context.globalStorageUri)
+            await vscode.workspace.fs.writeFile(vscode.Uri.file(debugPath), Buffer.from(message.content || '', 'utf8'))
+          } catch {}
+          break
+        }
         case 'save':
           await syncToEditor()
           await document.save()
@@ -590,6 +634,9 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const toMediaPath = (f: string) => `media/dist/${f}`
     const JsFiles = ['main.js'].map(toMediaPath).map(toUri)
     const CssFiles = ['main.css'].map(toMediaPath).map(toUri)
+    // 改过的 Lute(AST Node 加了 Line 字段):提前用 id="vditorLuteScript" 注入,
+    // vditor addScript 看到 id 已存在会跳过它的远程 CDN 加载,用我们这份
+    const luteUri = toUri(toMediaPath('lute.min.js'))
 
     return (
       `<!DOCTYPE html>
@@ -612,6 +659,7 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 				<div id="app"></div>
 
 
+				<script id="vditorLuteScript" src="${luteUri}"></script>
 				${JsFiles.map((f) => `<script src="${f}"></script>`).join('\n')}
 			</body>
 			</html>`

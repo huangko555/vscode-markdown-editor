@@ -1,155 +1,264 @@
-import MarkdownIt from 'markdown-it'
-
-// 用 markdown-it 解析源 md,提取每个块级 token 的源行号,扁平成"锚点列表",
-// 再走 vditor 渲染的 DOM 拍平成"DOM 锚点列表",两个列表用双指针顺序匹配 + 文本校验对齐,
-// 命中后把 1-based 源行号写到 data-source-line 属性上,CSS 用 ::after 渲染数字。
+// 方案 F:按内容查表对齐
 //
-// 旧版按"DOM 树 vs token 树严格同位对齐"做递归,vditor 在某些编辑态下 DOM 局部结构会跟
-// markdown-it 期望的结构有出入(比如插 wrapper、删空 p、tight list 不渲染 <p> 等等),
-// 一旦递归对齐在某点错位,后续所有元素都拿不到 data-source-line。
-// 现在的扁平顺序匹配只在错位的那一个元素上"跳过",下游能继续对齐。
-const md = new MarkdownIt({ html: true, breaks: false })
+// 行号注入要靠两个东西:
+//   1) 源 = VS Code 文件 buffer 原文(由扩展端 postMessage 推过来,存到 window.__vscodeBuffer)
+//      ——不能用 vditor.getValue(),它返回 vditor 内部"压缩源",会丢空 marker 行
+//   2) Lute(已 patch,AST Node 带 Line 字段) 解析这个 buffer,得到一系列 Hit:
+//      { tag, sourceLine, signature, isAnchor, hasContent }
+//
+// 配对:不再用纯顺序双指针(那种中间一处错位下游全错),改成 "顺序游标 + 按内容签名查表 + 锚点强制重锚"
+//   - 每个 DOM 块独立从 hits 队列里按 signature 找匹配,找不到就标 unmatched,不污染后续
+//   - heading / code / hr 等锚点块配对成功后强制把游标跳到那里,把"前面没消费的 hit"清零
+//   - 错位最多在两个锚点之间局部出现,绝不蔓延全文
+//
+// 诊断:每次 attach 都会把 hits / blocks / unmatched / orphans / anchors 全量 dump 到磁盘,
+//      新 corner case 出现一查 dump 立刻定位,不靠猜
 
-// 锚点:一个可标行号的源块,带源行号、tag、首段净文本(用于校验匹配)
-type Anchor = {
-  lineStart: number
+declare const Lute: any
+declare const vscode: any
+
+type Hit = {
+  tag: string          // 'p' | 'h' | 'list' | 'li' | 'blockquote' | 'table' | 'tr' | 'code' | 'hr'
+  sourceLine: number   // 1-based 行号(VS Code buffer 行号)
   lineEnd: number
-  tag: string
-  text: string
+  signature: string    // 归一化后的首段文字签名,用于内容匹配
+  isAnchor: boolean    // 是否结构强锚点(heading/code/hr),用于重锚
+  hasContent: boolean  // 有没有可见文字(没有 vditor 可能不渲染对应 DOM)
 }
 
-// 这些 tag 在 token / DOM 里都会被采集为锚点
-const SHOWABLE_TAGS = new Set([
+// 独立 Lute 实例,避免动 vditor 的 lute renderer
+let _lute: any = null
+function getLute(): any | null {
+  if (_lute) return _lute
+  if (typeof Lute === 'undefined' || !Lute || !Lute.New) return null
+  _lute = Lute.New()
+  _lute.SetVditorIR(true)
+  return _lute
+}
+
+// hits 缓存:源没变就不重 parse,大幅减少编辑期间的 Lute 解析开销
+let _lastSource: string = ''
+let _lastHits: Hit[] = []
+// attach 整体短路:source + DOM 块数都没变就跳过整套对齐 + DOM 写入
+let _lastAppliedSource: string = ''
+let _lastAppliedBlockCount: number = -1
+
+// ----------------------------------------------------------------------------
+// 强 normalize:把任意一段文字归一化成签名,buffer 端跟 DOM 端都用同一套
+// ----------------------------------------------------------------------------
+function normalizeSig(s: string): string {
+  if (!s) return ''
+  let r = s
+  // 全角字符转半角(ASCII 范围内)
+  r = r.replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+  // Smart punctuation → ASCII
+  r = r.replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
+  r = r.replace(/[–—]/g, '-').replace(/…/g, '...')
+  // 中文标点统一成英文等价
+  r = r.replace(/[，]/g, ',').replace(/[。]/g, '.').replace(/[：]/g, ':')
+  r = r.replace(/[；]/g, ';').replace(/[！]/g, '!').replace(/[？]/g, '?')
+  r = r.replace(/[（]/g, '(').replace(/[）]/g, ')')
+  r = r.replace(/[【\[]/g, '[').replace(/[】\]]/g, ']')
+  // HTML entity 大致剥掉
+  r = r.replace(/&[a-z]+;/gi, '')
+  // 零宽字符 + 控制字符
+  r = r.replace(/[​-‍﻿ ]/g, '')
+  // markdown 标记
+  r = r.replace(/[*_`~#>\\\-+]/g, '')
+  // 数字+点列表 marker:只在"去掉后还有剩"时去,防止 "432" 这种纯数字内容被吃光
+  const stripped = r.replace(/^\d+[.)]\s*/, '')
+  if (stripped) r = stripped
+  // 所有空白折叠掉
+  r = r.replace(/\s+/g, '')
+  r = r.toLowerCase()
+  return r.slice(0, 50)
+}
+
+// ----------------------------------------------------------------------------
+// 用 Lute 走一遍 source,收集 Hit 序列
+// ----------------------------------------------------------------------------
+function parseHits(source: string): Hit[] {
+  // 缓存命中:源没变直接复用上次结果
+  if (source === _lastSource && _lastHits.length > 0) return _lastHits
+
+  const lute = getLute()
+  if (!lute) return []
+
+  const hits: Hit[] = []
+  const openStack: { hit: Hit; texts: string[] }[] = []
+
+  function getLine(node: any): number {
+    const io = node && node.__internal_object__
+    return (io && typeof io.Line === 'number' && io.Line > 0) ? io.Line : 0
+  }
+  function getLineEnd(node: any): number {
+    const io = node && node.__internal_object__
+    return (io && typeof io.LineEnd === 'number' && io.LineEnd > 0) ? io.LineEnd : 0
+  }
+
+  function block(tag: string, isAnchor: boolean) {
+    return (node: any, entering: boolean) => {
+      if (entering) {
+        const line = getLine(node)
+        const lineEnd = getLineEnd(node) || line
+        const hit: Hit = {
+          tag,
+          sourceLine: line,
+          lineEnd: Math.max(line, lineEnd),
+          signature: '',
+          isAnchor,
+          hasContent: false,
+        }
+        hits.push(hit)
+        openStack.push({ hit, texts: [] })
+      } else {
+        const f = openStack.pop()
+        if (f) {
+          const joined = f.texts.join('')
+          f.hit.signature = normalizeSig(joined)
+          f.hit.hasContent = !!f.hit.signature
+          // LineEnd 已在 entering 时从 node 拿过,这里不再覆盖
+        }
+      }
+      return ['', Lute.WalkContinue]
+    }
+  }
+
+  const leafCb = (node: any, entering: boolean) => {
+    if (entering) {
+      const text = (node.TokensStr && node.TokensStr()) || ''
+      if (text) {
+        for (const f of openStack) f.texts.push(text)
+      }
+    }
+    return ['', Lute.WalkContinue]
+  }
+
+  // hr 是 leaf-block,单独处理
+  const hrCb = (node: any, entering: boolean) => {
+    if (entering) {
+      const line = getLine(node)
+      hits.push({
+        tag: 'hr',
+        sourceLine: line,
+        lineEnd: line,
+        signature: '___hr___',
+        isAnchor: true,
+        hasContent: true,
+      })
+    }
+    return ['', Lute.WalkContinue]
+  }
+
+  const renderers: any = {
+    renderParagraph:     block('p', false),
+    renderHeading:       block('h', true),
+    renderList:          block('list', false),
+    renderListItem:      block('li', false),
+    renderBlockquote:    block('blockquote', false),
+    renderTable:         block('table', true),
+    renderTableRow:      block('tr', false),
+    renderCodeBlock:     block('code', true),
+    renderThematicBreak: hrCb,
+    renderText:          leafCb,
+    renderCodeBlockCode: leafCb,
+    renderHeadingC8hMarker: leafCb,
+  }
+
+  try {
+    lute.SetJSRenderers({ renderers: { Md2VditorIRDOM: renderers } })
+    lute.Md2VditorIRDOM(source)
+  } catch (e) {
+    return []
+  }
+  _lastSource = source
+  _lastHits = hits
+  return hits
+}
+
+// ----------------------------------------------------------------------------
+// DOM 端:扁平拿块元素 + 算 signature
+// ----------------------------------------------------------------------------
+const BLOCK_TAGS = new Set([
   'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'blockquote', 'ul', 'ol', 'li',
-  'table', 'tr', 'hr', 'code',
+  'table', 'tr', 'hr',
 ])
-// 容器型 tag 没有"自己的"文字(都是内部子锚点的文字),匹配时只校 tag 不校文本
-const SKIP_TEXT_CHECK = new Set(['ul', 'ol', 'blockquote', 'table', 'hr', 'code'])
-
-// 文本归一化:去空白 / 零宽字符,截前 20 字。不剥任何标记字符 —
-// 之前试过开头剥 markdown 标记(-, *, 数字., > 等)误剥到合法内容(如 "0.1 → 0.2" 的开头),
-// 导致大批锚点变空/超短后互相错配。改用 textsMatch 的"任意位置子串包含"做容错
-function normalizeText(s: string): string {
-  return (s || '').replace(/[\s​-‍﻿]+/g, '').slice(0, 30)
-}
-
-// 从 markdown-it inline token 的 children 里只取真正的可见字符,
-// 跳过 **/_/`/[]()/链接 URL 等只是结构性 markdown 标记的部分
-function extractInlinePureText(inline: any): string {
-  if (!inline.children) return inline.content || ''
-  let out = ''
-  for (const child of inline.children) {
-    if (out.length >= 30) break
-    if (child.type === 'text' || child.type === 'code_inline') {
-      out += child.content || ''
-    } else if (child.type === 'softbreak' || child.type === 'hardbreak') {
-      out += ' '
-    }
-    // emphasis_open/close, strong_open/close, link_open/close 等没 content,直接跳过
-  }
-  return out
-}
-
-// 把 markdown-it tokens 扁平成 Anchor 列表:遇到 open 块开锚点 + 占位等待文本,
-// 后续出现的同层 inline token 的文字会回填到栈里所有还没填文本的开口锚点上
-// (这样 li -> p -> inline 时,li 和 p 都拿到 inline 文本)
-function getTokenAnchors(tokens: any[]): Anchor[] {
-  const anchors: Anchor[] = []
-  const openStack: Anchor[] = []
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i]
-    if (t.nesting === 1 && t.tag && SHOWABLE_TAGS.has(t.tag)) {
-      const a: Anchor = {
-        lineStart: t.map ? t.map[0] : 0,
-        lineEnd: t.map ? t.map[1] : 0,
-        tag: t.tag,
-        text: '',
-      }
-      anchors.push(a)
-      openStack.push(a)
-    } else if (t.nesting === -1 && t.tag) {
-      // 从栈里弹出最近一个同 tag 的开口锚点
-      for (let k = openStack.length - 1; k >= 0; k--) {
-        if (openStack[k].tag === t.tag) {
-          openStack.splice(k, 1)
-          break
-        }
-      }
-    } else if (t.nesting === 0) {
-      if ((t.type === 'fence' || t.type === 'code_block') && t.map) {
-        anchors.push({
-          lineStart: t.map[0],
-          lineEnd: t.map[1],
-          tag: 'code',
-          text: normalizeText(t.content || ''),
-        })
-      } else if (t.type === 'hr' && t.map) {
-        anchors.push({ lineStart: t.map[0], lineEnd: t.map[1], tag: 'hr', text: '' })
-      } else if (t.type === 'inline' && openStack.length > 0) {
-        const text = normalizeText(extractInlinePureText(t))
-        // 回填栈里所有还没文本的开口锚点(li 和它内的 p 都得到同一段文字)
-        for (const a of openStack) {
-          if (!a.text) a.text = text
-        }
-      }
-    }
-  }
-  return anchors
-}
 
 function isMarkerEl(el: Element): boolean {
-  return el.classList && el.classList.contains('vditor-ir__marker')
+  return !!(el.classList && el.classList.contains('vditor-ir__marker'))
 }
 
-// 走 DOM 取元素的首段净文本:跳过 vditor-ir__marker(里面是隐藏的 # > ** 等 markdown 标记字符)
-function getDomFirstText(el: Element): string {
-  let buf = ''
-  function walk(n: Node): boolean {
-    if (buf.length >= 30) return true
-    if (n.nodeType === Node.TEXT_NODE) {
-      buf += n.textContent || ''
-      return false
+function isEffectivelyEmpty(el: Element): boolean {
+  // 含媒体元素的段落不算空,要给它打行号(图片/视频/iframe 等)
+  if (el.querySelector('img, video, audio, iframe, svg, picture, source')) return false
+  const raw = el.textContent || ''
+  return raw.replace(/[\s​-‍﻿　]+/g, '') === ''
+}
+
+function isBlockEl(el: Element): { yes: boolean; isCodeBlock: boolean; isAnchor: boolean } {
+  const tag = el.tagName.toLowerCase()
+  if (tag === 'p' && isEffectivelyEmpty(el)) return { yes: false, isCodeBlock: false, isAnchor: false }
+  if (BLOCK_TAGS.has(tag)) {
+    const isAnchor = /^h[1-6]$/.test(tag) || tag === 'hr' || tag === 'table'
+    return { yes: true, isCodeBlock: false, isAnchor }
+  }
+  if (tag === 'div' && (el.className || '').toString().indexOf('vditor-ir__node') >= 0) {
+    if (el.getAttribute('data-type') === 'code-block') {
+      return { yes: true, isCodeBlock: true, isAnchor: true }
     }
-    if (n.nodeType === Node.ELEMENT_NODE) {
-      const e = n as Element
-      if (isMarkerEl(e)) return false
-      for (let i = 0; i < e.childNodes.length; i++) {
-        if (walk(e.childNodes[i])) return true
+  }
+  return { yes: false, isCodeBlock: false, isAnchor: false }
+}
+
+function innerCandidates(el: Element): Element[] {
+  if (el.tagName.toLowerCase() === 'table') {
+    const out: Element[] = []
+    for (let i = 0; i < el.children.length; i++) {
+      const c = el.children[i] as Element
+      const ct = c.tagName.toLowerCase()
+      if (ct === 'thead' || ct === 'tbody') {
+        for (let j = 0; j < c.children.length; j++) out.push(c.children[j] as Element)
+      } else {
+        out.push(c)
       }
     }
-    return false
+    return out
   }
-  walk(el)
-  return normalizeText(buf)
+  return Array.from(el.children) as Element[]
 }
 
-function isShowableDom(el: Element): boolean {
-  const tag = el.tagName.toLowerCase()
-  if (SHOWABLE_TAGS.has(tag) && tag !== 'code') return true
-  if (tag === 'hr') return true
-  // 代码块容器:vditor IR 渲染成 <div class="vditor-ir__node" data-type="code-block">
-  if (tag === 'div' && (el.className || '').toString().indexOf('vditor-ir__node') >= 0) {
-    if (el.getAttribute('data-type') === 'code-block') return true
-  }
-  return false
-}
+type DomBlock = { el: Element; tag: string; sig: string; isAnchor: boolean }
 
-// DFS 走 root,按文档顺序拍平所有 isShowable 元素。
-// 代码块/<pre> 内部不再下钻(里面是代码字符,不是块级锚点)
-function getDomAnchors(root: HTMLElement): Element[] {
-  const out: Element[] = []
+function getDomBlocks(root: HTMLElement): DomBlock[] {
+  const out: DomBlock[] = []
+  function walkText(el: Element, buf: string[], stopAt: number) {
+    if (buf.join('').length >= stopAt) return
+    for (let i = 0; i < el.childNodes.length; i++) {
+      const n = el.childNodes[i]
+      if (buf.join('').length >= stopAt) return
+      if (n.nodeType === Node.TEXT_NODE) {
+        buf.push(n.textContent || '')
+      } else if (n.nodeType === Node.ELEMENT_NODE) {
+        const e = n as Element
+        if (isMarkerEl(e)) continue
+        walkText(e, buf, stopAt)
+      }
+    }
+  }
   function walk(el: Element) {
-    if (isShowableDom(el)) {
-      out.push(el)
+    const r = isBlockEl(el)
+    if (r.yes) {
       const tag = el.tagName.toLowerCase()
-      // 代码块作为锚点本身,内部不再要锚点
-      if (tag === 'div') return
+      const tagN = r.isCodeBlock ? 'div' : tag
+      const buf: string[] = []
+      walkText(el, buf, 80)
+      const sig = normalizeSig(buf.join(''))
+      out.push({ el, tag: tagN, sig, isAnchor: r.isAnchor })
+      if (r.isCodeBlock) return
     }
     if (el.tagName.toLowerCase() === 'pre') return
-    for (let i = 0; i < el.children.length; i++) {
-      walk(el.children[i] as Element)
-    }
+    for (const c of innerCandidates(el)) walk(c)
   }
   for (let i = 0; i < root.children.length; i++) {
     walk(root.children[i] as Element)
@@ -157,85 +266,218 @@ function getDomAnchors(root: HTMLElement): Element[] {
   return out
 }
 
-function matchesTag(domTag: string, tokTag: string): boolean {
-  if (domTag === tokTag) return true
-  // 代码块:token 的 'code' 对应 DOM 的 'div'(vditor IR)或 'pre'
-  if (tokTag === 'code' && (domTag === 'div' || domTag === 'pre')) return true
+// ----------------------------------------------------------------------------
+// tag 相容性
+// ----------------------------------------------------------------------------
+function tagMatch(domTag: string, hitTag: string): boolean {
+  if (domTag === hitTag) return true
+  if (hitTag === 'list' && (domTag === 'ul' || domTag === 'ol')) return true
+  if (hitTag === 'h' && /^h[1-6]$/.test(domTag)) return true
+  if (hitTag === 'code' && domTag === 'div') return true
   return false
 }
 
-// 文本是否相符
-//   - 完全相等 / 一方是另一方前缀 → 相符
-//   - 两边都空 → 相符(空 LI、空段落)
-//   - 一边空一边非空 → 不相符(防止把空 token 错对到有文字的元素上)
-function textsMatch(a: string, b: string): boolean {
-  if (a === b) return true
-  if (!a && !b) return true
-  if (!a || !b) return false
-  if (a.startsWith(b) || b.startsWith(a)) return true
-  return false
+// ----------------------------------------------------------------------------
+// 配对算法:按内容查表 + 顺序游标 + 锚点强制重锚
+// ----------------------------------------------------------------------------
+const LOOKAHEAD = 30  // 从游标往后看多少个 hit
+const SIG_PREFIX = 6  // 签名前缀匹配最小长度
+
+type AlignResult = {
+  matched: { block: DomBlock; hit: Hit; how: 'exact' | 'prefix' | 'tag-fallback' }[]
+  unmatched: DomBlock[]
+  orphans: { i: number; hit: Hit }[]
+  anchorResets: string[]
 }
 
-function canMatch(dom: Element, tok: Anchor): boolean {
-  const domTag = dom.tagName.toLowerCase()
-  if (!matchesTag(domTag, tok.tag)) return false
-  if (SKIP_TEXT_CHECK.has(tok.tag)) return true
-  return textsMatch(getDomFirstText(dom), tok.text)
-}
+function align(hits: Hit[], blocks: DomBlock[]): AlignResult {
+  const result: AlignResult = { matched: [], unmatched: [], orphans: [], anchorResets: [] }
+  const consumed: boolean[] = new Array(hits.length).fill(false)
+  let cursor = 0
 
-// 双指针顺序对齐:能匹配就同时进位;不能就前瞻 LOOKAHEAD 个看哪边能跳过,选距离小的一边跳。
-// 两边都找不到 → 都进一步,放弃这一对(罕见,只在 DOM 跟源完全脱节时出现)
-function alignAnchors(domAnchors: Element[], tokAnchors: Anchor[]): void {
-  const LOOKAHEAD = 30
-  let di = 0
-  let ti = 0
-  while (di < domAnchors.length && ti < tokAnchors.length) {
-    const dom = domAnchors[di]
-    const tok = tokAnchors[ti]
+  for (const block of blocks) {
+    let found = -1
+    let how: 'exact' | 'prefix' | 'tag-fallback' = 'exact'
 
-    if (canMatch(dom, tok)) {
-      dom.setAttribute('data-source-line', String(tok.lineStart + 1))
-      // 多行段落:overlay 渲染每源行的行号,attach 时需要 data-source-line-end
-      if (tok.tag === 'p' && tok.lineEnd - tok.lineStart > 1) {
-        dom.setAttribute('data-source-line-end', String(tok.lineEnd))
+    // Pass 1:精确签名 + tag 相容(两边都空也算精确,覆盖图片/iframe 等无文字 block)
+    for (let k = cursor; k < Math.min(cursor + LOOKAHEAD, hits.length); k++) {
+      if (consumed[k]) continue
+      if (!tagMatch(block.tag, hits[k].tag)) continue
+      if (block.sig === hits[k].signature) {
+        found = k; how = 'exact'; break
       }
-      di++
-      ti++
-      continue
     }
 
-    // 不能匹配:前瞻找哪边能跳过
-    let domSkipTo = -1
-    for (let k = di + 1; k < Math.min(di + 1 + LOOKAHEAD, domAnchors.length); k++) {
-      if (canMatch(domAnchors[k], tok)) { domSkipTo = k; break }
-    }
-    let tokSkipTo = -1
-    for (let k = ti + 1; k < Math.min(ti + 1 + LOOKAHEAD, tokAnchors.length); k++) {
-      if (canMatch(dom, tokAnchors[k])) { tokSkipTo = k; break }
+    // Pass 2:前缀签名匹配
+    if (found < 0 && block.sig.length >= SIG_PREFIX) {
+      for (let k = cursor; k < Math.min(cursor + LOOKAHEAD, hits.length); k++) {
+        if (consumed[k]) continue
+        if (!tagMatch(block.tag, hits[k].tag)) continue
+        const hsig = hits[k].signature
+        if (hsig.length >= SIG_PREFIX) {
+          if (block.sig.startsWith(hsig.slice(0, SIG_PREFIX)) || hsig.startsWith(block.sig.slice(0, SIG_PREFIX))) {
+            found = k; how = 'prefix'; break
+          }
+        }
+      }
     }
 
-    if (domSkipTo >= 0 && tokSkipTo >= 0) {
-      // 两边都能跳:选步幅小的一边
-      if (tokSkipTo - ti <= domSkipTo - di) ti = tokSkipTo
-      else di = domSkipTo
-    } else if (domSkipTo >= 0) {
-      di = domSkipTo
-    } else if (tokSkipTo >= 0) {
-      ti = tokSkipTo
+    // Pass 3:tag fallback(锚点节点签名差异大也允许 tag 匹配)
+    if (found < 0 && block.isAnchor) {
+      for (let k = cursor; k < Math.min(cursor + LOOKAHEAD, hits.length); k++) {
+        if (consumed[k]) continue
+        if (tagMatch(block.tag, hits[k].tag) && hits[k].isAnchor) {
+          found = k; how = 'tag-fallback'; break
+        }
+      }
+    }
+
+    if (found >= 0) {
+      consumed[found] = true
+      result.matched.push({ block, hit: hits[found], how })
+      // 锚点重锚:游标跳过前面所有 unconsumed 节点,这些算 orphan
+      if (block.isAnchor && hits[found].isAnchor) {
+        for (let k = cursor; k < found; k++) {
+          if (!consumed[k]) {
+            // 标记为 consumed 防止后续误配,但记录为 anchor-skipped
+            consumed[k] = true
+          }
+        }
+        cursor = found + 1
+        result.anchorResets.push(`<${block.tag}> L${hits[found].sourceLine} sig="${block.sig.slice(0, 25)}"`)
+      } else {
+        if (found >= cursor) cursor = found + 1
+      }
     } else {
-      // 都找不到匹配,放弃这一对
-      di++
-      ti++
+      result.unmatched.push(block)
     }
+  }
+
+  // orphan hits = 没被消费的 hits
+  hits.forEach((h, i) => {
+    if (!consumed[i] && h.hasContent) result.orphans.push({ i, hit: h })
+  })
+
+  return result
+}
+
+// ----------------------------------------------------------------------------
+// 主入口
+// ----------------------------------------------------------------------------
+// 只在值真的变化时写 setAttribute / removeAttribute,避免不必要的 DOM mutation 触发 MutationObserver 回环
+function setAttrIfChanged(el: Element, name: string, value: string | null) {
+  const cur = el.getAttribute(name)
+  if (value === null) {
+    if (cur !== null) el.removeAttribute(name)
+  } else if (cur !== value) {
+    el.setAttribute(name, value)
   }
 }
 
-export function injectSourceLines(root: HTMLElement, source: string) {
-  root.querySelectorAll('[data-source-line]').forEach((el) => el.removeAttribute('data-source-line'))
-  root.querySelectorAll('[data-source-line-end]').forEach((el) => el.removeAttribute('data-source-line-end'))
+export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
+  // 用 VS Code buffer 作为权威源,buffer 未到就退回到 vditor.getValue()(初始那一瞬间用)
+  const buffer = (window as any).__vscodeBuffer
+  const source = (typeof buffer === 'string' && buffer.length > 0)
+    ? buffer
+    : ((window as any).vditor && (window as any).vditor.getValue ? (window as any).vditor.getValue() : '')
+
   if (!source) return
-  const tokens = md.parse(source, {})
-  const tokAnchors = getTokenAnchors(tokens)
-  const domAnchors = getDomAnchors(root)
-  alignAnchors(domAnchors, tokAnchors)
+
+  // 快速短路:source 跟上次一致 + DOM 块数没变就跳过整套对齐(常见编辑期 mutation observer 的伪触发)
+  // querySelectorAll('[data-source-line]') 比走整棵树算 block 快得多
+  if (source === _lastAppliedSource) {
+    const liveCount = root.querySelectorAll('[data-source-line]').length
+    if (liveCount === _lastAppliedBlockCount) return
+  }
+
+  const hits = parseHits(source)
+  if (hits.length === 0) return
+  const blocks = getDomBlocks(root)
+  const result = align(hits, blocks)
+
+  // 收集 matched DOM,差集中其余 [data-source-line] 元素清掉属性
+  const matchedSet = new Set<Element>()
+  for (const m of result.matched) {
+    if (m.hit.sourceLine > 0) {
+      matchedSet.add(m.block.el)
+      setAttrIfChanged(m.block.el, 'data-source-line', String(m.hit.sourceLine))
+      if (m.hit.tag === 'p' && m.hit.lineEnd > m.hit.sourceLine) {
+        setAttrIfChanged(m.block.el, 'data-source-line-end', String(m.hit.lineEnd))
+      } else {
+        setAttrIfChanged(m.block.el, 'data-source-line-end', null)
+      }
+    }
+  }
+  // 清掉本次没匹配上的旧 attribute(避免上次 attach 残留)
+  root.querySelectorAll('[data-source-line]').forEach((el) => {
+    if (!matchedSet.has(el)) {
+      setAttrIfChanged(el, 'data-source-line', null)
+      setAttrIfChanged(el, 'data-source-line-end', null)
+    }
+  })
+
+  // 记录这次 apply 的状态,下次进 attach 时短路用
+  _lastAppliedSource = source
+  _lastAppliedBlockCount = matchedSet.size
+
+  // 保存到 window 供 dump 用
+  ;(window as any).__lastAlignResult = { hits, blocks, result, source }
+}
+
+// ----------------------------------------------------------------------------
+// 自动 dump 诊断数据给扩展端,扩展端写到磁盘文件供 Claude 直接读
+// ----------------------------------------------------------------------------
+;(window as any).__debugSourceMapDump = function () {
+  try {
+    const r = (window as any).__lastAlignResult
+    if (!r) return
+    const { hits, blocks, result, source } = r
+    const dump = {
+      timestamp: new Date().toISOString(),
+      sourceLineCount: source.split('\n').length,
+      source,
+      hits: hits.map((h: Hit, i: number) => ({
+        i, tag: h.tag, line: h.sourceLine, lineEnd: h.lineEnd,
+        isAnchor: h.isAnchor, hasContent: h.hasContent,
+        sig: h.signature,
+      })),
+      blocks: blocks.map((b: DomBlock, i: number) => ({
+        i, tag: b.tag, isAnchor: b.isAnchor,
+        dataSourceLine: b.el.getAttribute('data-source-line') || '',
+        sig: b.sig,
+        // 同时 dump outerHTML 摘要,看 vditor 实际怎么渲染的(只截前 400 字)
+        html: (b.el as HTMLElement).outerHTML.slice(0, 400),
+      })),
+      matched: result.matched.map((m: any) => ({
+        blockTag: m.block.tag,
+        hitTag: m.hit.tag,
+        line: m.hit.sourceLine,
+        how: m.how,
+        sig: m.block.sig.slice(0, 30),
+      })),
+      unmatched: result.unmatched.map((b: DomBlock) => ({
+        tag: b.tag, isAnchor: b.isAnchor, sig: b.sig,
+      })),
+      orphans: result.orphans.map((o: any) => ({
+        i: o.i, tag: o.hit.tag, line: o.hit.sourceLine, sig: o.hit.signature,
+      })),
+      anchorResets: result.anchorResets,
+    }
+    if (typeof vscode !== 'undefined' && vscode.postMessage) {
+      vscode.postMessage({ command: 'debug-dump', content: JSON.stringify(dump, null, 2) })
+    }
+  } catch (e) {
+    console.warn('debug dump failed', e)
+  }
+}
+
+// 手动入口:在 webview devtools console 调 __debugSourceMap()
+;(window as any).__debugSourceMap = function () {
+  const r = (window as any).__lastAlignResult
+  if (!r) { console.log('no align result yet'); return }
+  const { hits, blocks, result } = r
+  console.log('matched:', result.matched.length, 'unmatched:', result.unmatched.length, 'orphans:', result.orphans.length)
+  console.log('anchor resets:', result.anchorResets)
+  console.log('unmatched blocks:', result.unmatched.map((b: DomBlock) => `<${b.tag}> "${b.sig.slice(0,30)}"`))
+  console.log('orphan hits:', result.orphans.map((o: any) => `${o.hit.tag} L${o.hit.sourceLine} "${o.hit.signature.slice(0,30)}"`))
 }

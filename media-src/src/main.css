@@ -155,17 +155,49 @@ body[data-use-vscode-theme-color="1"] .vditor {
 .vditor-reset table tr {
   background-color: transparent !important;
 }
-/* 行号:每个带 data-source-line 的元素 ::after 显示源行号
-   JS 算每个元素的 --vmd-gutter-x(水平偏移),让所有数字落到同一 X 列
-   data-source-line 由 markdown-it 解析源 md 拿 token.map 后注入 */
-body.lineno-on .vditor-ir > .vditor-reset,
-body.lineno-on .vditor-wysiwyg > .vditor-reset {
-  padding-left: 60px !important;
+/* 分割线减细:vditor 默认 2px 视觉太重 */
+.vditor-reset hr {
+  height: 1px !important;
 }
-body.lineno-on [data-source-line] {
+/* 引用块左边竖线:细 + 蓝(用代码块同一个 Google 蓝主色,透明度低一点接近代码块底色色调) */
+.vditor-reset blockquote {
+  border-left-width: 3px !important;
+  border-left-color: rgba(66, 133, 244, 0.6) !important;
+}
+/* 表格自适应窗口宽度,单元格内容自动 wrap 撑高,不出横向滚动条 */
+.vditor-reset table {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: auto !important;
+  overflow: visible !important;
+  display: table !important;
+}
+.vditor-reset table td,
+.vditor-reset table th {
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+}
+/* 空表格行的 cell 用 ZWSP 占位,撑出跟正常行一样的高度,不被压缩成细条 */
+.vditor-reset table td::before,
+.vditor-reset table th::before {
+  content: '\200B';
+}
+/* 行号:每个带 data-source-line 的元素 ::after 显示源行号
+   两种模式:
+     lineno-on:全部 [data-source-line]::after 显示
+     lineno-off:只有 .vmd-cursor-on(光标所在最近 [data-source-line] 祖先)显示
+   JS 算每个元素的 --vmd-gutter-x(水平偏移),让所有数字落到同一 X 列 */
+.vditor-ir > .vditor-reset,
+.vditor-wysiwyg > .vditor-reset {
+  padding-left: 60px !important; /* gutter 槽位始终保留,cursor 模式才有地方放行号 */
+}
+body.lineno-on [data-source-line],
+body:not(.lineno-on) [data-source-line].vmd-cursor-on {
   position: relative;
 }
-body.lineno-on [data-source-line]::after {
+body.lineno-on [data-source-line]::after,
+body:not(.lineno-on) [data-source-line].vmd-cursor-on::after {
   content: attr(data-source-line);
   position: absolute;
   left: var(--vmd-gutter-x, -50px);
@@ -191,12 +223,21 @@ body.lineno-on h2[data-source-line]::after,
 body.lineno-on h3[data-source-line]::after,
 body.lineno-on h4[data-source-line]::after,
 body.lineno-on h5[data-source-line]::after,
-body.lineno-on h6[data-source-line]::after {
+body.lineno-on h6[data-source-line]::after,
+body:not(.lineno-on) h1[data-source-line].vmd-cursor-on::after,
+body:not(.lineno-on) h2[data-source-line].vmd-cursor-on::after,
+body:not(.lineno-on) h3[data-source-line].vmd-cursor-on::after,
+body:not(.lineno-on) h4[data-source-line].vmd-cursor-on::after,
+body:not(.lineno-on) h5[data-source-line].vmd-cursor-on::after,
+body:not(.lineno-on) h6[data-source-line].vmd-cursor-on::after {
   top: calc(var(--vmd-gutter-y, 46%) + 0.5em);
 }
-/* 表格行号:tr 拿不到有效 lineHeight,退回 46% 后视觉偏上;再下移几像素 */
-body.lineno-on tr[data-source-line]::after {
-  top: calc(var(--vmd-gutter-y, 46%) + 7px);
+/* 表格行号:让数字严格居中到 tr 视觉中线(覆盖外面通用 --vmd-gutter-y 那一套,
+   table cell 有自己的 padding/line-height,通用规则定位不准) */
+body.lineno-on tr[data-source-line]::after,
+body:not(.lineno-on) tr[data-source-line].vmd-cursor-on::after {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
 }
 
 /* 代码块 / 多行段落 per-line gutter overlay:每行单独 div,JS 用 Range 实测每行 Y */
@@ -235,10 +276,23 @@ body:not(.lineno-on) .vmd-block-gutter {
 body.lineno-on [data-source-line-end]::after {
   display: none;
 }
-/* 嵌套结构里(ul>li、ol>li、blockquote>p、table>tr、li>p[data-source-line-end] 等),
-   只让最深层的 [data-source-line] 画 ::after,祖先的 ::after 与子元素或 overlay 在同一 Y 会叠两个数字
-   .vmd-code-gutter:代码块用 overlay 标 content 行号,外层包裹元素的 ::after(fence 行号) 也要藏掉 */
-body.lineno-on [data-source-line]:has([data-source-line], .vmd-code-gutter)::after {
+/* 纯容器(ul/ol/blockquote/table/code-block)的 ::after 隐藏:它们没有"自己的文字行",
+   ::after 跟内部子元素的 ::after 会在同一 Y 重复。
+   注意:嵌套 li(有自己的文字 + 内含子 ul/ol)父级 LI 必须保留 ::after,放在父 li 自己文字所在那一行 */
+body.lineno-on ul[data-source-line]::after,
+body.lineno-on ol[data-source-line]::after,
+body.lineno-on blockquote[data-source-line]::after,
+body.lineno-on table[data-source-line]::after,
+body.lineno-on div.vditor-ir__node[data-type="code-block"][data-source-line]::after {
+  display: none;
+}
+/* 代码块外层(若是其它形态的包裹元素也可能含 .vmd-code-gutter)兜底:含 code-gutter 的 ::after 隐藏 */
+body.lineno-on [data-source-line]:has(> .vmd-code-gutter)::after {
+  display: none;
+}
+/* loose list:li 直接含 p[data-source-line]时,let p 显示 ::after,li 自己让位
+   (两者 Y 几乎一样,显示一次就够;父 li 有嵌套子 list 时仍然由 li 显示行号 ← 子 list 的 ul 已经被上面规则隐藏了) */
+body.lineno-on li[data-source-line]:has(> p[data-source-line])::after {
   display: none;
 }
 
