@@ -476,6 +476,12 @@ export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
   }
   if (hits.length === 0) return   // worker 首次还没返回,行号稍后(~550ms)出现
 
+  applyHitsToDom(root, hits, hitsSource)
+}
+
+// 把一组 hits 对齐到 DOM 并写 data-source-line。injectSourceLines(worker 路径)与
+// injectSourceLinesSync(同步路径)共用,避免逻辑两份。
+function applyHitsToDom(root: HTMLElement, hits: Hit[], hitsSource: string) {
   // 快速短路:hits 没更新 + DOM 块数没变 → 跳过整套对齐
   if (hitsSource === _lastAppliedSource) {
     const liveCount = root.querySelectorAll('[data-source-line]').length
@@ -512,6 +518,22 @@ export function injectSourceLines(root: HTMLElement, _ignoredSource: string) {
 
   // 保存到 window 供 dump 用
   ;(window as any).__lastAlignResult = { hits, blocks, result, source: hitsSource }
+}
+
+// 同步注入:绕开 worker,当场用 parseHits 解析当前 buffer 并对齐。只给"外部内容整体替换"这类低频场景用
+// (setValue 后 worker 缓存的还是旧内容 hits,干等异步回传会让行号迟迟不出/对不上)。
+// 顺手把 worker 缓存喂成这份最新结果,避免随后 worker 路径再拿旧 hits 覆盖回去。
+export function injectSourceLinesSync(root: HTMLElement) {
+  const buffer = (window as any).__vscodeBuffer
+  const source = (typeof buffer === 'string' && buffer.length > 0)
+    ? buffer
+    : ((window as any).vditor && (window as any).vditor.getValue ? (window as any).vditor.getValue() : '')
+  if (!source) return
+  const hits = parseHits(source)   // 主线程同步解析(仅此低频路径,不影响打字时的 worker 优化)
+  if (hits.length === 0) return
+  _workerHits = hits               // 喂给 worker 缓存,后续 worker 路径 inject 会短路命中、不再用旧 hits
+  _workerHitsSource = source
+  applyHitsToDom(root, hits, source)
 }
 
 // ----------------------------------------------------------------------------

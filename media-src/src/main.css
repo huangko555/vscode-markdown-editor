@@ -324,6 +324,67 @@ body.lineno-on li[data-source-line]:has(> p[data-source-line])::after {
   display: none;
 }
 
+/* ===== Ctrl/Cmd+F 搜索 ===== */
+/* 高亮:用 CSS Custom Highlight API,不改 DOM */
+::highlight(vmd-search) {
+  background-color: rgba(255, 211, 61, 0.4);
+}
+::highlight(vmd-search-current) {
+  background-color: #ff9632;
+  color: #000;
+}
+/* 搜索框:固定在编辑器右上角 */
+.vmd-search-bar {
+  position: fixed;
+  top: 8px;
+  right: 24px;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+.vmd-search-bar.vmd-search-bar--open {
+  display: flex;
+}
+.vmd-search-input {
+  width: 180px;
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground, #ccc);
+  background: var(--vscode-input-background, #3c3c3c);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  outline: none;
+  font-size: 12px;
+}
+.vmd-search-input:focus {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+.vmd-search-count {
+  min-width: 38px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground, #999);
+  user-select: none;
+}
+.vmd-search-bar button {
+  padding: 2px 6px;
+  color: var(--vscode-icon-foreground, #ccc);
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.vmd-search-bar button:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+}
+
 /* 去掉 vditor 默认给 H1/H2 加的下划横线(GitHub markdown 风格,源 md 里没有这条线) */
 .vditor-reset h1,
 .vditor-reset h2,
@@ -364,11 +425,80 @@ body.zebra-on .vditor-reset table tbody tr:nth-child(2n) {
   background-color: rgba(66, 133, 244, 0.1) !important;
 }
 
-/* make outline panel resizable horizontally (default width 250px preserved) */
+/* 目录宽度:用整条右缘自定义把手调整(见 .vmd-outline-resizer),不用原生右下角 resize */
 .vditor-outline {
-  resize: horizontal !important;
+  resize: none !important;
   min-width: 150px !important;
   max-width: 600px !important;
+}
+/* 右缘拖拽把手:全高,盖在内容滚动条之上(拖它时拦截 mousedown,不会误拖滚动条) */
+.vmd-outline-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  z-index: 11;
+  cursor: ew-resize;
+}
+.vmd-outline-resizer:hover {
+  background: var(--vscode-focusBorder, #4daafc);
+  opacity: 0.5;
+}
+
+/* ===== 目录(outline)增强:标题固定 + 固定/浮动切换 ===== */
+/* 显示时改成 flex 纵向:标题固定不滚,只有列表区滚动(标题在滚动条之外)。
+   vditor 用内联 display:block 显隐,故用 [style*="block"] + !important 命中"显示态",隐藏态(display:none)不受影响 */
+.vditor-outline[style*="block"] {
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden;
+}
+.vditor-outline__title {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.vditor-outline__content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* 标题右侧固定按钮(单色 SVG,currentColor;状态靠图标形状区分,不靠颜色) */
+.vmd-outline-pin {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.7;
+  color: var(--toolbar-icon-color, #888);
+}
+.vmd-outline-pin > svg {
+  display: block;
+}
+.vmd-outline-pin:hover {
+  opacity: 1;
+}
+
+/* 浮动(默认,未固定):目录绝对定位浮在正文上,正文不让位 */
+body:not(.outline-pinned) .vditor-outline {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.25);
+}
+/* 固定:回到流内,正文让位(vditor 原生 flex 行为) */
+body.outline-pinned .vditor-outline {
+  position: relative;
+  box-shadow: none;
 }
 
 /* heading colors — uniform blue across all levels */

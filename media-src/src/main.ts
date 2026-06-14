@@ -8,7 +8,11 @@ import {
   fixPanelHover,
   handleToolbarClick,
   fixOutlineCloseScroll,
+  setupOutlinePin,
+  setupOutlineAutoHide,
+  setupOutlineResizer,
   getVisibleEditorRoot,
+  getMainScroller,
   saveVditorOptions,
 } from './utils'
 
@@ -19,7 +23,8 @@ import 'vditor/dist/index.css'
 import { t, lang } from './lang'
 import { toolbar } from './toolbar'
 import { fixTableIr } from './fix-table-ir'
-import { injectSourceLines } from './source-map'
+import { injectSourceLines, injectSourceLinesSync } from './source-map'
+import { initSearch } from './search'
 import './main.css'
 
 // restore zebra toggle state (default ON;only explicit '0' keeps off)
@@ -38,6 +43,13 @@ try {
   }
 } catch {}
 
+// restore outline pin state (default OFF = 浮动)
+try {
+  if (localStorage.getItem('vditor-md.outlinePinned') === '1') {
+    document.body.classList.add('outline-pinned')
+  }
+} catch {}
+
 // restore color swatch toggle state (default ON;only explicit '0' keeps off)
 try {
   if (localStorage.getItem('vditor-md.swatch') !== '0') {
@@ -46,7 +58,6 @@ try {
 } catch {
   document.body.classList.add('swatch-on')
 }
-
 
 // 行号映射:用 vditor 内置 Lute parser 解析源 md(跟 IR DOM 同 parser,AST 1:1 对应 DOM),
 // 把源行号注入到 data-source-line。再算每个元素的 --vmd-gutter-x,让 ::after 行号都落到同一 X 列。
@@ -645,6 +656,9 @@ function initVditor(msg) {
       fixTableIr()
       fixPanelHover()
       fixOutlineCloseScroll()
+      setupOutlinePin()
+      setupOutlineAutoHide()
+      setupOutlineResizer()
       // 首次 attach 延迟到 idle callback:大文档(数千行)attach 要全量 Lute 解析 + DOM 遍历,
       // 同步跑会卡住首屏可见时间。延迟后用户先看到内容,行号慢一拍出来,体感快很多。
       const firstAttach = () => { attachLineNumbers(); bindLineMo() }
@@ -721,6 +735,76 @@ function initVditor(msg) {
   })
 }
 
+// 外部(原生编辑器 / 外部工具 / 切回面板补课)推来的内容更新:setValue 会整段重建 DOM、丢掉滚动位置。
+// 这里在重建前后用源行号锚定,把"视口顶部第一个可见块"还原回原来的像素位置 —— 哪怕视口上方内容增删了
+// 也能让你正看的那块稳停原位。锚点拿不到时退回到原始 scrollTop(等价于最朴素的存/还原)。
+function findBlockByLine(root: HTMLElement, line: number): HTMLElement | null {
+  let target: HTMLElement | null = null
+  let bestLine = -1
+  const els = root.querySelectorAll<HTMLElement>('[data-source-line]')
+  for (let i = 0; i < els.length; i++) {
+    const l = parseInt(els[i].getAttribute('data-source-line') || '0')
+    if (l === line) return els[i]
+    if (l > 0 && l <= line && l > bestLine) { bestLine = l; target = els[i] }
+  }
+  return target
+}
+function applyExternalUpdate(content: string) {
+  // __vscodeBuffer 是行号注入的权威源,外部同步时 content 即文档全文,先更新它,后续 inject/attach 才正确
+  ;(window as any).__vscodeBuffer = content
+
+  const scroller = getMainScroller()
+  // —— 重建前:捕获锚点(视口顶第一个可见块的源行号 + 它距 scroller 顶的像素偏移)
+  let anchorLine = 0
+  let anchorDelta = 0
+  const savedScrollTop = scroller ? scroller.scrollTop : 0
+  if (scroller) {
+    const root = getVisibleEditorRoot()
+    if (root) {
+      const scTop = scroller.getBoundingClientRect().top
+      const els = root.querySelectorAll<HTMLElement>('[data-source-line]')
+      for (let i = 0; i < els.length; i++) {
+        const r = els[i].getBoundingClientRect()
+        if (r.bottom > scTop + 1) {  // 第一个底边落在视口顶之下的块 = 视口顶可见块
+          const l = parseInt(els[i].getAttribute('data-source-line') || '0')
+          if (l > 0) { anchorLine = l; anchorDelta = r.top - scTop }
+          break
+        }
+      }
+    }
+  }
+
+  vditor.setValue(content)  // 同步重建 DOM(已确认 IR 模式 setValue 同步)
+
+  // 立即同步注入新内容的正确行号:setValue 后 worker 缓存还是旧 hits,干等异步回传会让行号迟迟不出/对不上。
+  // 这里当场算好正确的 data-source-line,既让行号立刻正确显示,也让下面的滚动锚点用上准确行号。
+  const newRoot = getVisibleEditorRoot()
+  if (newRoot) injectSourceLinesSync(newRoot)
+
+  // —— 重建后:按锚点还原滚动(data-source-line 已就绪,直接定位)
+  const restore = () => {
+    if (!scroller) return
+    const root = getVisibleEditorRoot()
+    if (anchorLine && root) {
+      const target = findBlockByLine(root, anchorLine)
+      if (target) {
+        const scTop = scroller.getBoundingClientRect().top
+        scroller.scrollTop += (target.getBoundingClientRect().top - scTop) - anchorDelta
+        return
+      }
+    }
+    scroller.scrollTop = savedScrollTop  // 兜底:锚点没拿到就还原原始 scrollTop
+  }
+  restore()
+
+  // 直接重建行号 overlay / gutter-x/y / 色块(不走 scheduleAttach 的 debounce 和 _typing 守卫,
+  // 确保行号当场出来;此时 source 已同步对齐,attach 内部的 worker 路径 inject 会短路、不会用旧 hits 覆盖)
+  attachLineNumbers()
+
+  // 二次还原:吸收视口上方图片 / mermaid / 公式异步加载导致的高度变化
+  requestAnimationFrame(() => restore())
+}
+
 window.addEventListener('message', (e) => {
   const msg = e.data
   // console.log('msg from vscode', msg)
@@ -751,7 +835,7 @@ window.addEventListener('message', (e) => {
         }
         console.log('initVditor')
       } else {
-        vditor.setValue(msg.content)
+        applyExternalUpdate(msg.content)
         console.log('setValue')
       }
       break
@@ -782,6 +866,7 @@ window.addEventListener('message', (e) => {
 
 fixLinkClick()
 fixCut()
+initSearch()
 
 vscode.postMessage({ command: 'ready' })
 // 让扩展端把 VS Code 文件 buffer 推一次过来,行号注入要用 buffer 作为权威源

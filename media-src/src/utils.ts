@@ -145,7 +145,7 @@ function ensureSelectionInEditor() {
   } catch {}
 }
 
-function getMainScroller(): HTMLElement | null {
+export function getMainScroller(): HTMLElement | null {
   // 同样要过滤可见,否则会拿到隐藏的 .vditor-wysiwyg(scrollHeight=0)误降级到 body
   const candidates = document.querySelectorAll<HTMLElement>('.vditor-ir, .vditor-wysiwyg, .vditor-sv')
   let scroller: HTMLElement | null = null
@@ -202,6 +202,115 @@ export function fixOutlineCloseScroll() {
       // 最终兜底:500ms 后如果 scroll 仍是 0 且 saved > 0,直接拉回
       if (!restored && scroller.scrollTop === 0) scroller.scrollTop = saved
     }, 600)
+  }, true)
+}
+
+// 目录增强:标题右侧注入"固定/浮动"切换按钮。每次 vditor 初始化都调(outline 元素会重建),按钮已存在则跳过。
+export function setupOutlinePin() {
+  const title = document.querySelector('.vditor-outline__title') as HTMLElement | null
+  if (!title || title.querySelector('.vmd-outline-pin')) return
+  const btn = document.createElement('button')
+  btn.className = 'vmd-outline-pin'
+  btn.type = 'button'
+  // 单色图钉,靠形状区分状态(不靠颜色):固定=竖直图钉,浮动=斜置图钉。颜色始终一致。
+  const PIN = 'M16 3v2h-1v6l2 2v2h-4v6l-1 1-1-1v-6H6v-2l2-2V5H7V3h9z'
+  const ICON_PINNED = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="${PIN}"/></svg>`
+  const ICON_UNPINNED = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><g transform="rotate(45 12 12)"><path d="${PIN}"/></g></svg>`
+  const sync = () => {
+    const pinned = document.body.classList.contains('outline-pinned')
+    btn.innerHTML = pinned ? ICON_PINNED : ICON_UNPINNED
+    btn.title = pinned ? '已固定(正文让位、点条目不收起)— 点击取消固定' : '浮动(浮在正文上、点条目自动收起)— 点击固定'
+  }
+  sync()
+  btn.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const pinned = document.body.classList.toggle('outline-pinned')
+    try { localStorage.setItem('vditor-md.outlinePinned', pinned ? '1' : '0') } catch {}
+    sync()
+    // 浮动/停靠 切换改变了布局,触发 vditor 重算内容 padding/居中
+    try { window.dispatchEvent(new Event('resize')) } catch {}
+  }, true)
+  title.appendChild(btn)
+}
+
+// 目录宽度调整:整条右缘做拖拽把手(替代原生右下角 resize)。拖动时屏蔽文本选中/滚动条拖动。宽度持久化。
+export function setupOutlineResizer() {
+  const outline = document.querySelector('.vditor-outline') as HTMLElement | null
+  if (!outline || outline.querySelector('.vmd-outline-resizer')) return
+  // 恢复上次宽度
+  try {
+    const w = localStorage.getItem('vditor-md.outlineWidth')
+    if (w && +w >= 150 && +w <= 600) outline.style.width = w + 'px'
+  } catch {}
+  const resizer = document.createElement('div')
+  resizer.className = 'vmd-outline-resizer'
+  resizer.setAttribute('contenteditable', 'false')
+  outline.appendChild(resizer)
+
+  let dragging = false
+  const onMove = (ev: MouseEvent) => {
+    if (!dragging) return
+    ev.preventDefault()  // 屏蔽拖动时的文本选中
+    const rect = outline.getBoundingClientRect()
+    const w = Math.max(150, Math.min(600, ev.clientX - rect.left))
+    outline.style.width = w + 'px'
+  }
+  const onUp = () => {
+    if (!dragging) return
+    dragging = false
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+    document.removeEventListener('mousemove', onMove, true)
+    document.removeEventListener('mouseup', onUp, true)
+    try { localStorage.setItem('vditor-md.outlineWidth', String(parseInt(outline.style.width, 10) || 250)) } catch {}
+    try { window.dispatchEvent(new Event('resize')) } catch {}  // 停靠态:正文宽度跟着重算
+  }
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault()       // 关键:阻止默认行为,不触发滚动条拖动/选中
+    e.stopPropagation()
+    dragging = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'ew-resize'
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('mouseup', onUp, true)
+  }, true)
+}
+
+// 收起目录(优先调 vditor 自身 toggle 以同步工具栏按钮状态,失败再直接隐藏)
+function hideOutline() {
+  try {
+    const v = (window as any).vditor
+    if (v && v.vditor && v.vditor.outline && typeof v.vditor.outline.toggle === 'function') {
+      v.vditor.outline.toggle(v.vditor, false)
+      return
+    }
+  } catch {}
+  const el = document.querySelector('.vditor-outline') as HTMLElement | null
+  if (el) el.style.display = 'none'
+}
+
+// 浮动模式下的自动收起:① 点目录里的标题跳转项 → 跳转后收起;② 点目录以外任何地方 → 收起。
+// 固定模式从不自动收起。document 级 capture 监听,绑一次即可(跨重建有效)。
+let _outlineAutoHideBound = false
+export function setupOutlineAutoHide() {
+  if (_outlineAutoHideBound) return
+  _outlineAutoHideBound = true
+  document.addEventListener('click', (e) => {
+    if (document.body.classList.contains('outline-pinned')) return  // 固定:从不自动收起
+    const outline = document.querySelector('.vditor-outline') as HTMLElement | null
+    if (!outline || getComputedStyle(outline).display === 'none') return  // 目录没显示,无需处理
+    const t = e.target as Element | null
+    if (!t || !t.closest) return
+    // ① 点标题跳转项:vditor 自己的 click 会先跳转(它 stopPropagation,所以我们用 capture 抢在前面排定时器),
+    //    setTimeout 0 让跳转这一轮事件跑完后立刻收起(体感即时)
+    if (t.closest('.vditor-outline [data-target-id]')) { setTimeout(hideOutline, 0); return }
+    // 点目录内部其它地方(折叠箭头 / 空白 / 拖拽 resize)→ 不收起
+    if (t.closest('.vditor-outline')) return
+    // 点工具栏目录按钮 → 交给 vditor 自己 toggle,别重复收起
+    if (t.closest('[data-type="outline"]')) return
+    // ② 点目录以外任何地方 → 收起
+    hideOutline()
   }, true)
 }
 
