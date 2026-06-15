@@ -3,7 +3,7 @@
   "displayName": "Vditor MD Editor",
   "icon": "media/logo.png",
   "description": "Personal fork of zaaack/vscode-markdown-editor with outline button + heading colors + smaller padding.",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "publisher": "huangko555",
   "private": true,
   "engines": {

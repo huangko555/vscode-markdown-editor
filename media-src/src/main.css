@@ -454,7 +454,7 @@ body.zebra-on .vditor-reset table tbody tr:nth-child(2n) {
   margin-left: 11px;
   /* 直接用 rgba,不要用 --vscode-tree-indentGuidesStroke:VS Code 在 webview 里会注入这个变量,
      fallback 永远进不来,改透明度看不出效果 */
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
 }
 /* 每一行:flex 布局 + 紧凑 padding + hover 高亮整行 */
 .vditor-outline li > span {
