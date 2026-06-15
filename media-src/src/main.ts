@@ -481,6 +481,21 @@ function detachLineMo() { if (attachTimer) { clearTimeout(attachTimer); attachTi
   if (root) attachColorSwatches(root)
 }
 
+// 目录(outline)实时刷新:vditor 在 IR 输入路径不重渲目录(只在打开面板/setValue/粘贴时渲),
+// 导致打字新增/改动标题后目录不更新。这里在编辑后手动补一次,且只在目录面板可见时才渲(省开销)。
+// 注意:outline 实例挂在 vditor.vditor.outline(内层 IVditor),不是 window.vditor 外层 API。
+// 目录(outline)实时刷新:vditor IR 输入路径不重渲目录(只在 setValue/打开面板时渲),
+// input() 已在 vditor 自身 processTimeoutId(~200ms)后触发,此时 IR DOM 已最新,直接渲即可。
+// outline 实例挂在 vditor.vditor.outline(内层 IVditor),不是 window.vditor 外层 API。
+function refreshOutlineIfVisible() {
+  const ol = document.querySelector('.vditor-outline') as HTMLElement | null
+  if (!ol || getComputedStyle(ol).display === 'none') return  // 关掉就零开销
+  const v = (window as any).vditor
+  const inner = v && v.vditor
+  if (!inner || !inner.outline || typeof inner.outline.render !== 'function') return
+  try { inner.outline.render(inner) } catch {}
+}
+
 // 光标模式:lineno-off 时只显示光标所在最近 [data-source-line] 祖先的行号。
 // 监听 selectionchange,rAF 节流,给该元素加 .vmd-cursor-on(CSS 让它 ::after 显示)
 let cursorRafId: number | null = null
@@ -693,6 +708,7 @@ function initVditor(msg) {
         inputTimer = setTimeout(() => {
           _typing = false
           scheduleAttach()
+          refreshOutlineIfVisible()
           if ((window as any).__updateCursorMarker) (window as any).__updateCursorMarker()
           const send = () => vscode.postMessage({ command: 'edit', content: vditor.getValue() })
           if (typeof (window as any).requestIdleCallback === 'function') {
@@ -704,6 +720,7 @@ function initVditor(msg) {
       } else {
         // 小文档:不冻结,立即调度 attach(30ms 后),行号即时跟随;getValue 短 debounce 同步
         scheduleAttach()
+        refreshOutlineIfVisible()
         inputTimer && clearTimeout(inputTimer)
         inputTimer = setTimeout(() => {
           vscode.postMessage({ command: 'edit', content: vditor.getValue() })

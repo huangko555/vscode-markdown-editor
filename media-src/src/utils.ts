@@ -205,33 +205,92 @@ export function fixOutlineCloseScroll() {
   }, true)
 }
 
-// 目录增强:标题右侧注入"固定/浮动"切换按钮。每次 vditor 初始化都调(outline 元素会重建),按钮已存在则跳过。
+// "折叠到前两层":嵌套深度≥2 的 li 的子 ul 折叠,只保留文档最高的两层标题。
+// 用 vditor 原生的折叠机制(chevron 加 close class + 子 ul display:none),状态一致,后续手动展开仍正常。
+function collapseOutlineToTopTwo() {
+  const root = document.querySelector('.vditor-outline__content') as HTMLElement | null
+  if (!root) return
+  root.querySelectorAll('li').forEach((li) => {
+    let depth = 0
+    let p: Element | null = li.parentElement
+    while (p && p !== root) {
+      if (p.tagName === 'UL') depth++
+      p = p.parentElement
+    }
+    // depth=1 顶层(最高级别), depth=2 次层。depth=2 的 li 的子 ul 折叠 → 仅保留前两层可见。
+    const action = li.querySelector(':scope > span > .vditor-outline__action') as HTMLElement | null
+    const sub = li.querySelector(':scope > ul') as HTMLElement | null
+    if (!sub) return
+    if (depth >= 2) {
+      action && action.classList.add('vditor-outline__action--close')
+      sub.setAttribute('style', 'display:none')
+    } else {
+      action && action.classList.remove('vditor-outline__action--close')
+      sub.setAttribute('style', 'display:block')
+    }
+  })
+}
+
+// 全部展开:清掉所有 close 类、所有子 ul 设 display:block。
+function expandAllOutline() {
+  const root = document.querySelector('.vditor-outline__content') as HTMLElement | null
+  if (!root) return
+  root.querySelectorAll('.vditor-outline__action--close').forEach((a) => a.classList.remove('vditor-outline__action--close'))
+  root.querySelectorAll('li > ul').forEach((ul) => (ul as HTMLElement).setAttribute('style', 'display:block'))
+}
+
+// 目录增强:标题右侧注入"折叠到两层 / 全部展开 / 固定切换"三个按钮(顺序固定)。
+// 每次 vditor 初始化都调(outline 元素会重建),按钮已存在则跳过。
 export function setupOutlinePin() {
   const title = document.querySelector('.vditor-outline__title') as HTMLElement | null
-  if (!title || title.querySelector('.vmd-outline-pin')) return
-  const btn = document.createElement('button')
-  btn.className = 'vmd-outline-pin'
-  btn.type = 'button'
-  // 单色图钉,靠形状区分状态(不靠颜色):固定=竖直图钉,浮动=斜置图钉。颜色始终一致。
+  if (!title || title.querySelector('.vmd-outline-actions')) return
+
+  const actions = document.createElement('span')
+  actions.className = 'vmd-outline-actions'
+
+  // 折叠到前两层 — 双 chevron 朝中心(线条风格,跟图钉一致)
+  const collapseBtn = document.createElement('button')
+  collapseBtn.className = 'vmd-outline-action'
+  collapseBtn.type = 'button'
+  collapseBtn.title = '折叠到前两层'
+  // Codicon collapse-all(VS Code 资源管理器同款,MIT 许可)
+  collapseBtn.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M14 4.27051C14.5999 4.62053 15 5.26009 15 6V11C15 13.21 13.21 15 11 15H6C5.26009 15 4.62053 14.5999 4.27051 14H11C12.65 14 14 12.65 14 11V4.27051Z"/><path d="M9.5 7C9.776 7 10 7.224 10 7.5C10 7.776 9.776 8 9.5 8H5.5C5.224 8 5 7.776 5 7.5C5 7.224 5.224 7 5.5 7H9.5Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M11 2C12.103 2 13 2.897 13 4V11C13 12.103 12.103 13 11 13H4C2.897 13 2 12.103 2 11V4C2 2.897 2.897 2 4 2H11ZM4 3C3.449 3 3 3.449 3 4V11C3 11.552 3.449 12 4 12H11C11.551 12 12 11.552 12 11V4C12 3.449 11.551 3 11 3H4Z"/></svg>'
+  collapseBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); collapseOutlineToTopTwo() }, true)
+
+  // 全部展开 — 双 chevron 朝外
+  const expandBtn = document.createElement('button')
+  expandBtn.className = 'vmd-outline-action'
+  expandBtn.type = 'button'
+  expandBtn.title = '全部展开'
+  // Codicon expand-all(同套图标,中间 + 表示展开)
+  expandBtn.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M15 6V11C15 13.21 13.21 15 11 15H6C5.26 15 4.62 14.6 4.27 14H11C12.65 14 14 12.65 14 11V4.27C14.6 4.62 15 5.26 15 6ZM11 13H4C2.897 13 2 12.103 2 11V4C2 2.897 2.897 2 4 2H11C12.103 2 13 2.897 13 4V11C13 12.103 12.103 13 11 13ZM4 12H11C11.551 12 12 11.552 12 11V4C12 3.449 11.551 3 11 3H4C3.449 3 3 3.449 3 4V11C3 11.552 3.449 12 4 12ZM9.5 7H8V5.5C8 5.224 7.776 5 7.5 5C7.224 5 7 5.224 7 5.5V7H5.5C5.224 7 5 7.224 5 7.5C5 7.776 5.224 8 5.5 8H7V9.5C7 9.776 7.224 10 7.5 10C7.776 10 8 9.776 8 9.5V8H9.5C9.776 8 10 7.776 10 7.5C10 7.224 9.776 7 9.5 7Z"/></svg>'
+  expandBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); expandAllOutline() }, true)
+
+  // 固定/浮动图钉(原逻辑) — 靠形状区分状态:固定=竖直,浮动=斜置
+  const pinBtn = document.createElement('button')
+  pinBtn.className = 'vmd-outline-pin'
+  pinBtn.type = 'button'
   const PIN = 'M16 3v2h-1v6l2 2v2h-4v6l-1 1-1-1v-6H6v-2l2-2V5H7V3h9z'
   const ICON_PINNED = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="${PIN}"/></svg>`
   const ICON_UNPINNED = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><g transform="rotate(45 12 12)"><path d="${PIN}"/></g></svg>`
-  const sync = () => {
+  const syncPin = () => {
     const pinned = document.body.classList.contains('outline-pinned')
-    btn.innerHTML = pinned ? ICON_PINNED : ICON_UNPINNED
-    btn.title = pinned ? '已固定(正文让位、点条目不收起)— 点击取消固定' : '浮动(浮在正文上、点条目自动收起)— 点击固定'
+    pinBtn.innerHTML = pinned ? ICON_PINNED : ICON_UNPINNED
+    pinBtn.title = pinned ? '已固定(正文让位、点条目不收起)— 点击取消固定' : '浮动(浮在正文上、点条目自动收起)— 点击固定'
   }
-  sync()
-  btn.addEventListener('click', (e) => {
-    e.preventDefault()
-    e.stopPropagation()
+  syncPin()
+  pinBtn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation()
     const pinned = document.body.classList.toggle('outline-pinned')
     try { localStorage.setItem('vditor-md.outlinePinned', pinned ? '1' : '0') } catch {}
-    sync()
-    // 浮动/停靠 切换改变了布局,触发 vditor 重算内容 padding/居中
-    try { window.dispatchEvent(new Event('resize')) } catch {}
+    syncPin()
+    try { window.dispatchEvent(new Event('resize')) } catch {}  // 浮动/停靠切换:让 vditor 重算正文 padding
   }, true)
-  title.appendChild(btn)
+
+  actions.appendChild(collapseBtn)
+  actions.appendChild(expandBtn)
+  actions.appendChild(pinBtn)
+  title.appendChild(actions)
 }
 
 // 目录宽度调整:整条右缘做拖拽把手(替代原生右下角 resize)。拖动时屏蔽文本选中/滚动条拖动。宽度持久化。
@@ -246,7 +305,12 @@ export function setupOutlineResizer() {
   const resizer = document.createElement('div')
   resizer.className = 'vmd-outline-resizer'
   resizer.setAttribute('contenteditable', 'false')
-  outline.appendChild(resizer)
+  // ⚠️ 关键:必须插在 .vditor-outline__content 之前,确保 content 保持 lastElementChild。
+  // vditor 的 outline.render 会把新 HTML 写到 this.element.lastElementChild,如果把 resizer
+  // appendChild 到末尾,render 会写进 resizer 这条隐形 6px 条,目录列表永远不更新。
+  const content = outline.querySelector('.vditor-outline__content')
+  if (content) outline.insertBefore(resizer, content)
+  else outline.appendChild(resizer)
 
   let dragging = false
   const onMove = (ev: MouseEvent) => {
@@ -302,14 +366,17 @@ export function setupOutlineAutoHide() {
     if (!outline || getComputedStyle(outline).display === 'none') return  // 目录没显示,无需处理
     const t = e.target as Element | null
     if (!t || !t.closest) return
-    // ① 点标题跳转项:vditor 自己的 click 会先跳转(它 stopPropagation,所以我们用 capture 抢在前面排定时器),
+    // ① 点 chevron 折叠/展开图标:vditor 自己处理折叠;我们既不收起也不跳转
+    //    (chevron svg 在带 data-target-id 的外层 span 内部,必须先判断,否则会被下面 data-target-id 命中而误收起)
+    if (t.closest('.vditor-outline__action')) return
+    // ② 点标题跳转项:vditor 自己的 click 会先跳转(它 stopPropagation,所以我们用 capture 抢在前面排定时器),
     //    setTimeout 0 让跳转这一轮事件跑完后立刻收起(体感即时)
     if (t.closest('.vditor-outline [data-target-id]')) { setTimeout(hideOutline, 0); return }
-    // 点目录内部其它地方(折叠箭头 / 空白 / 拖拽 resize)→ 不收起
+    // 点目录内部其它地方(空白 / 拖拽 resize)→ 不收起
     if (t.closest('.vditor-outline')) return
     // 点工具栏目录按钮 → 交给 vditor 自己 toggle,别重复收起
     if (t.closest('[data-type="outline"]')) return
-    // ② 点目录以外任何地方 → 收起
+    // ③ 点目录以外任何地方 → 收起
     hideOutline()
   }, true)
 }

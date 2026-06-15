@@ -431,6 +431,73 @@ body.zebra-on .vditor-reset table tbody tr:nth-child(2n) {
   min-width: 150px !important;
   max-width: 600px !important;
 }
+
+/* ===== 目录样式:参考 VS Code 资源管理器 =====
+   - 同级标题左缘对齐到同一列
+   - 折叠图标占固定宽度,不挤文字;叶节点空出同等位置保持对齐
+   - 每层嵌套画一条垂直缩进引导线(border-left)
+   - 紧凑行高,hover 时整行淡灰背景 */
+.vditor-outline__content {
+  padding: 4px 0;
+  font-size: 13px;
+}
+.vditor-outline__content ul {
+  list-style: none !important;
+  margin: 0;
+  padding: 0;
+}
+/* 嵌套层级 = 缩进 + 引导线;根 ul 没线 */
+.vditor-outline__content ul ul {
+  /* margin-left = 引导线位置,padding-left = 线到文字的距离;两者之和 = 文字相对父项的总缩进。
+     线往右移就把 margin 调大、padding 减同样量,保持文字位置不变。 */
+  padding-left: 3px;
+  margin-left: 11px;
+  /* 直接用 rgba,不要用 --vscode-tree-indentGuidesStroke:VS Code 在 webview 里会注入这个变量,
+     fallback 永远进不来,改透明度看不出效果 */
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+/* 每一行:flex 布局 + 紧凑 padding + hover 高亮整行 */
+.vditor-outline li > span {
+  display: flex !important;
+  align-items: center;
+  padding: 2px 8px 2px 4px !important;
+  border-radius: 2px;
+  min-width: 0;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.vditor-outline li > span:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.07));
+  color: inherit !important;
+}
+/* 折叠图标:固定 14px(原 10px 太小),不参与文字挤压。右边 margin 2px = 与文字间距 */
+.vditor-outline li > span > svg {
+  flex: 0 0 14px !important;
+  width: 14px !important;
+  height: 14px !important;
+  margin-right: 2px;
+}
+/* chevron 颜色:强制覆盖 vditor SVG 的内联 fill(它写死了原色,opacity 调不下来)。
+   同时给 svg / path / use 全打,无论 SVG 是 path 直填还是 use 引用都能压住。 */
+.vditor-outline li > span > svg,
+.vditor-outline li > span > svg path,
+.vditor-outline li > span > svg use {
+  fill: rgba(255, 255, 255, 0.4) !important;
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+/* 叶节点对齐:无 svg 时,文字 span = :first-child;给它 16px 左空白(14 图标 + 2 间距),
+   保证和"有图标行"的文字落在同一列。有 svg 时文字是 :nth-child(2),不匹配,无副作用。 */
+.vditor-outline li > span > span:first-child {
+  margin-left: 16px;
+}
+/* 标题文字:flex 占满 + 省略号 */
+.vditor-outline li > span > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* 右缘拖拽把手:全高,盖在内容滚动条之上(拖它时拦截 mousedown,不会误拖滚动条) */
 .vmd-outline-resizer {
   position: absolute;
@@ -466,7 +533,15 @@ body.zebra-on .vditor-reset table tbody tr:nth-child(2n) {
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* 标题右侧固定按钮(单色 SVG,currentColor;状态靠图标形状区分,不靠颜色) */
+/* 标题右侧按钮组(折叠 / 展开 / 固定),靠右,水平排列 */
+.vmd-outline-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 三个按钮共用样式(单色 SVG,currentColor) */
+.vmd-outline-action,
 .vmd-outline-pin {
   flex: 0 0 auto;
   display: flex;
@@ -479,9 +554,16 @@ body.zebra-on .vditor-reset table tbody tr:nth-child(2n) {
   opacity: 0.7;
   color: var(--toolbar-icon-color, #888);
 }
+/* 折叠 / 展开 按钮单独提亮(图钉保持低调) */
+.vmd-outline-action {
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.75);
+}
+.vmd-outline-action > svg,
 .vmd-outline-pin > svg {
   display: block;
 }
+.vmd-outline-action:hover,
 .vmd-outline-pin:hover {
   opacity: 1;
 }
